@@ -1,0 +1,11182 @@
+; z80bench export — .
+; Generated: Sun Jul 12 08:51:11 2026
+; Assembler: z88dk/z80asm
+
+        INCLUDE "symbols.sym"
+        ORG     0x0000
+
+
+; Initialisation of the computer
+; START: (defined in symbols.sym)
+              di                   ; Test Start
+              xor   a              ; Clear A (color index 0)
+              ld    (0x6800),a     ; Set background color (black)
+              jp    BASIC_INIT_1   ; Jump to RESET part 1 (at 0674H)
+; RST08_VEC: (defined in symbols.sym)
+              jp    0x7800         ; RST 08H: Jump to RAM hook at 7800H (SYNCHR)
+
+;
+; Not used in VZ200
+; ROMRET: (defined in symbols.sym)
+              pop   hl             ; Pop return address to HL
+              jp    (hl)           ; Jump to HL (return to caller)
+              DEFB  0x00,0x00,0x00 ; unused
+
+; Restart 10
+; RST10_VEC: (defined in symbols.sym)
+              jp    0x7803         ; Jump via RAM vector 7803H to address 1D78H
+
+; Read a character via Device Control Block (DCB)
+; GET_CHAR_DCB: (defined in symbols.sym)
+              push  bc             ; Save BC
+              ld    b,0x01         ; Set B for DCB check
+              jr    DCB_CALL       ; to DCB call routine
+
+; Restart 18
+; RST18_VEC: (defined in symbols.sym)
+              jp    0x7806         ; Jump via RAM vector 7806H to address 1C90H
+
+; Output a character via Device Control Block (DCB)
+; PUT_CHAR_DCB: (defined in symbols.sym)
+              push  bc             ; Save BC
+              ld    b,0x02         ; Set B for DCB check
+              jr    DCB_CALL       ; to DCB call routine
+
+; Restart 20
+; RST20_VEC: (defined in symbols.sym)
+              jp    0x7809         ; Jump via RAM vector 7809H to address 25D9H
+              push  bc             ; not used
+              ld    b,0x04
+              jr    DCB_CALL
+
+; Restart 28
+; RST28_VEC: (defined in symbols.sym)
+              jp    0x780C         ; Jump to RAM vector 780CH
+
+; Keyboard query
+; On return, Reg. A contains the ASCII code of a pressed key, or 0 if none 
+; pressed.
+; KBD_QUERY: (defined in symbols.sym)
+              ld    de,0x7815      ; Load DCB address for keyboard
+              jr    GET_CHAR_DCB   ; continue at 13H
+
+; Restart 30
+; RST30_VEC: (defined in symbols.sym)
+              jp    0x780F         ; Jump to RAM vector 780FH
+
+; Screen output via DCB
+; Not used on LASER 110-310.
+; SCR_OUT_DCB: (defined in symbols.sym)
+              ld    de,0x781D      ; Load DCB address
+              jr    PUT_CHAR_DCB   ; continue at 1BH
+
+; Restart 38 - Interrupt vector for IM1
+; RST38_VEC: (defined in symbols.sym)
+              jp    ISR_TIMER      ; to Interrupt Service Routine
+
+; Printer output via Device Control Block (DCB)
+; Reg. A must contain the character to be output
+; PRN_OUT_DCB: (defined in symbols.sym)
+              ld    de,0x7825      ; Load DCB address
+              jr    PUT_CHAR_DCB   ; continue at 1BH
+              jp    KBD_SCAN_ONCE  ; to keyboard read routine
+              ret                  ; not used
+              DEFB  0x00,0x00      ; unused
+; DCB_CALL: (defined in symbols.sym)
+              jp    DCB_DISPATCH   ; Jump to DCB call routine
+
+; Keyboard query
+; waits until a key is pressed.
+; Output: A-reg contains ASCII code of the pressed key
+; KBD_WAIT: (defined in symbols.sym)
+              call  KBD_QUERY      ; Evaluate keyboard
+              or    a              ; Key pressed?
+              ret   nz             ; Yes, return
+              jr    KBD_WAIT       ; no, wait
+
+; Save character from cursor position
+; GET_CURSOR_CHAR: (defined in symbols.sym)
+              ld    hl,(CURS_ADDR) ; Load cursor address
+              ld    a,(hl)         ; Load character
+              ld    (0x783C),a     ; save to 783CH
+              ret   
+              DEFB  0x4C,0xFE,0x54,0x20,0xD6,0xFD,0x21,0xF1 ; not used
+; DELAY_LOOP: (defined in symbols.sym)
+              dec   bc
+              ld    a,b            ; B = 0?
+              or    c              ; C = 0?
+              jr    nz,DELAY_LOOP  ; No, continue loop
+              ret                  ; Yes, return
+
+; Interupt vector for 'Non maskable interrupts'
+; NMI_VEC: (defined in symbols.sym)
+              ld    sp,0x0600      ; Set stack pointer to 6000H
+              ld    a,(0x68EC)     ; Load latch byte from 68ECH
+              inc   a              ; Increment A
+              cp    0x02           ; CP 2
+              jp    nc,START       ; Jump if NC to cold start (0000H)
+              jp    0x06CC         ; Jump to warm start (06CCH)
+
+; BASIC initialisation part 2
+; BASIC_INIT_2: (defined in symbols.sym)
+              ld    de,FDIVC       ; Destination: 7880H (RAM hooks)
+              ld    hl,FDIV_HELPER_ROM ; Source: 18F7H
+              ld    bc,0x0027      ; Length: 27H bytes
+              ldir                 ; Copy routines to RAM
+
+; Set up I/O buffer
+; INIT_IO_BUF: (defined in symbols.sym)
+              ld    hl,0x79E5      ; Load I/O buffer start (79E5H)
+              ld    (hl),0x3A      ; Store ':' prompt
+              inc   hl             ; Increment HL
+              ld    (hl),b         ; Store character from B
+              inc   hl             ; Increment HL
+              ld    (hl),0x2C      ; Store ',' character
+              inc   hl             ; Increment HL
+              ld    (IO_BUF_PTR),hl ; Save I/O buffer pointer to 78A7H
+
+; Initialisation of the DOS error hooks (RAM: 7952H)
+INIT_DOS_HOOKS:
+              ld    de,ERROR_L3    ; Address of L3 error handler (012DH)
+              ld    b,0x1C         ; 28 DOS commands to initialize
+              ld    hl,0x7952      ; RAM hook table address (7952H)
+INIT_DOS_LOOP:
+              ld    (hl),0xC3      ; Store JP opcode (0xC3)
+              inc   hl             ; Increment RAM pointer
+              ld    (hl),e         ; Low byte of L3 handler
+              inc   hl             ; Increment RAM pointer
+              ld    (hl),d         ; High byte of L3 handler
+              inc   hl             ; Increment RAM pointer
+              djnz  INIT_DOS_LOOP  ; Loop for 28 entries
+
+; Initialisation of the DOS exits with RET (RAM: 79A6H)
+INIT_DOS_EXITS:
+              ld    b,0x15         ; 21 DOS exits to initialize
+INIT_EXIT_LOOP:
+              ld    (hl),0xC9      ; Store RET opcode (0xC9)
+              inc   hl             ; Advance 3 bytes (unused JP slot)
+              inc   hl
+              inc   hl
+              djnz  INIT_EXIT_LOOP ; Loop for 21 entries
+
+; End of BASIC init
+; Unused code block / timing delay? falls into next segment
+; possbile removed block from TRS-80?
+INIT_BASIC_FINISH:
+              ld    hl,0x7AE8      ; Load start of user RAM (7AE8H)
+              ld    (hl),b         ; Initialize it to zero
+              ld    sp,0x79F8      ; Set temporary stack pointer (79F8H)
+              call  0x1B8F         ; Initialize stack and variables (STKINI)
+              call  CLRSCR         ; Clear screen and home cursor (CLRSCR)
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+              DEFB  0x00
+
+; Skip memory test
+SKIP_MEM_TEST:
+              jr    MEM_TEST       ; Jump to memory test routine
+              rst   0x10
+              or    a
+              jr    nz,MEM_SIZE_INPUT
+
+; Memory test (memory size check)
+MEM_TEST:
+              ld    hl,0x7B4C      ; Start of RAM check (7B4CH)
+MEM_TEST_LOOP:
+              inc   hl             ; Next ram location
+              ld    a,h            ; Get MSB
+              or    l              ; Get LSB
+              jr    z,$+29         ; End of memory if zero (HIMEM)
+              ld    a,(hl)         ; Get byte from memory
+              ld    b,a            ; Save original byte in B
+              cpl                  ; Complement byte for test
+              ld    (hl),a         ; Write to memory
+              cp    (hl)           ; Check if it was stored correctly
+              ld    (hl),b         ; Restore original byte
+              jr    z,MEM_TEST_LOOP ; Loop back if memory exists
+              jr    $+19
+
+; unused code in VZ200 pr. G. Wolf book
+; Symbol name from Level II listing for TRS 80  
+; TODO: Document from TRS 80 listing.
+MEM_SIZE_INPUT:
+              call  DECZ           ; Handle memory size input
+              or    a
+              jp    nz,SYNTAX_ERR_HANDLER
+              ex    de,hl
+              dec   hl
+              ld    a,0x8F
+              ld    b,(hl)
+              ld    (hl),a
+              cp    (hl)
+              ld    (hl),b
+              jr    nz,$-48
+
+; Set end of memory for BASIC
+              dec   hl             ; address of the last byte
+              ld    de,0x7C14      ; at least 1868 bytes must be free
+              rst   0x18           ; check free memory
+              jp    c,ERROR_ENTRY  ; otherwise: OUT OF MEMORY error (197AH)
+              ld    de,0xFFCE      ; DE = -50 (FFCE is 2s comp. -50)
+              ld    (MEMSIZ),hl    ; store end-of-memory address (@ 78B1H)
+              add   hl,de          ; HL = end of memory - 50
+              ld    (STKTOP),hl    ; = start of string space - 1
+INIT_VARS_2:
+              call  0x1B4D         ; call the NEW routine (1B4DH)
+              call  INIT_IO_LATCH_AND_BUFFERS ; initialize counters and pointers (3484H)
+              ld    hl,0x010F      ; Load banner string address (010FH)
+              call  OUTSTR         ; Print banner string (OUTSTR)
+              im    1              ; Set Interrupt Mode 1
+              jp    BASIC_INIT_3   ; Jump to memory expansion check (068EH)
+              DEFB  0x00,0x7E,0x23,0xFE,0x0D ; Artifact? No caller
+              DEFM  "VIDEO TECHNOLOGY"
+              DEFB  0x0D
+              DEFM  "BASIC V2.0"
+              DEFB  0x0D,0x0D,0x00 ; term with 00
+
+; L3 Error Handler (?L3 ERROR)
+; ERROR_L3: (defined in symbols.sym)
+              ld    e,0x2C         ; Load error code 44 (L3 Error)
+              jp    ERROR_HANDLER  ; Jump to main error handler
+
+; GRAPHICS ROUTINE - Common Code for SET, RESET and POINT
+; A will be 0 for POINT, 80H for SET and 1 for RESET.
+POINT:
+              rst   0x10           ; Get next character (RST 10H)
+              xor   a              ; A = 0 (POINT flag)
+              DEFB  0x01           ; Skip LD A,n (01 matches LD BC,nn)
+SET:
+              ld    a,0x80         ; A = 80H (SET flag)
+              DEFB  0x01           ; Skip LD A,n
+RESET:
+              ld    a,0x01         ; A = 1 (RESET flag)
+              push  af             ; Save command flag (POINT/SET/RESET)
+              rst   8              ; Expect '(' (RST 08H)
+              jr    z,CHRGOT       ; JR Z, 010BH (GETBYT?)
+              inc   e              ; INC E
+              dec   hl             ; DEC HL
+              cp    0x80           ; X < 128?
+              jp    nc,0x1E4A      ; JP NC, FCERR (1E4AH)
+              push  af             ; Save X
+              rst   8              ; Expect ',' (RST 08H)
+              inc   l              ; INC L
+              call  GETBYT         ; Call GETBYT (2B1CH?)
+              cp    0x40           ; Y < 64?
+              jp    nc,0x1E4A      ; JP NC, FCERR (1E4AH)
+              ld    e,a            ; E = Y
+              xor   a              ; A = 0
+              ld    d,a            ; D = 0
+              ex    de,hl          ; DE <-> HL (HL = Y)
+              add   hl,hl          ; Y * 2
+              add   hl,hl          ; Y * 4
+              add   hl,hl          ; Y * 8
+              add   hl,hl          ; Y * 16
+              add   hl,hl          ; Y * 32
+              ex    de,hl          ; DE <-> HL (DE = Y * 32)
+              pop   af             ; Get X
+              push  af             ; Save X
+              srl   a              ; X / 2
+              srl   a              ; X / 4
+              add   a,e            ; A = X/4 + (Y*32 mod 256)
+              ld    e,a            ; E = A
+              ld    a,d            ; A = D (high byte of Y*32)
+              or    0x70           ; OR 70H (Video RAM starts at 7000H)
+              ld    d,a            ; D = A (DE = 7000H + Y*32 + X/4)
+              pop   af             ; Get X again
+              and   0x03           ; X AND 03H (pixel position in byte)
+              add   a,a            ; A = pixel * 2
+              ld    b,a            ; B = A
+              pop   af             ; Get original command flag (POINT/SET/RESET)
+              or    a              ; Is it POINT (0)?
+              jp    z,POINT_HELPER ; Yes, JP to POINT routine (38E7H)
+              push  af             ; Save Command flag
+              ld    c,0x3F         ; C = 3FH (Graphics mask?)
+              ld    a,(0x7846)     ; Get color mode latch?
+              sla   a              ; SLA A
+              sla   a              ; SLA A
+@L1:
+              rrc   a              ; RRC A
+              rrc   c              ; RRC C
+              djnz  @L1            ; DJNZ hBc2 (Shift bit into position)
+              jp    SET_RESET_HELPER ; JP to rest of SET/RESET (3903H)
+
+; Set cursor to 7839H and reset bit 3
+              ld    hl,FLAG2       ; Load 7839H (Cursor flags?)
+              res   3,(hl)         ; Reset bit 3
+              ld    hl,0x0384      ; Load address of 'ERROR' message
+              call  OUTSTR         ; Print string (OUTSTR)
+              jp    0x36CF         ; Jump to 36CFH
+
+; UNUSED BYTE ARTIFACT INSIDE VZ200 ROM
+              DEFB  0xF1,0xFE,0x20,0x20,0x14,0x1A,0x13,0xFE
+              DEFB  0x20,0x28,0xFA,0xFE
+
+; Parameter / Coordinate Parsing (for Graphics?)
+              rst   0x10           ; Get next character (RST 10H)
+              push  hl             ; Save pointer
+              ld    a,(0x7899)     ; Get RAM byte 7899H
+              or    a              ; Zero?
+              jr    nz,@L2         ; No, skip next part
+              call  KBD_QUERY_WRAP ; Call 0358H
+              or    a              ; Zero?
+              jr    z,@L3          ; Yes, skip ahead
+@L2:
+              push  af
+              xor   a
+              ld    (0x7899),a
+              inc   a
+              call  STRINI         ; Call STRINI (2857H)
+              pop   af
+              ld    hl,(0x78D4)    ; Get 78D4H
+              ld    (hl),a
+              jp    0x2884         ; Jump to 2884H
+@L3:
+              ld    hl,0x1928      ; Load 1928H into 7921H
+              ld    (FACLO),hl
+              ld    a,0x03         ; Set 78AFH to 3
+              ld    (VALTYP),a
+              pop   hl             ; Restore HL
+              ret                  ; Return
+
+; Clear Screen and Home Cursor
+; CLRSCR: (defined in symbols.sym)
+              ld    a,0x1C         ; Clear screen (1CH)
+              call  SCREEN_OUT_CHAR
+              ld    a,0x1F         ; Move cursor home (1FH)
+              jp    SCREEN_OUT_CHAR
+
+; RANDOM statement seed initialization
+RANDOM_INIT:
+              ld    a,r            ; Get Refresh Register R
+              ld    (0x78AB),a     ; Store refresh value as random seed base
+              ret   
+
+; Keyboard tables
+; Key codes without SHIFT
+KEYBOARD_CODES_NORMAL:
+              DEFB  0x54,0x47,0x42,0x35,0x4E,0x36,0x59,0x48 ; Bit row 0
+              DEFB  0x57,0x53,0x58,0x32,0x2E,0x39,0x4F,0x4C ; Bit row 1
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x2D,0x0D,0x3A ; Bit row 2
+              DEFB  0x45,0x44,0x43,0x33,0x2C,0x38,0x49,0x4B ; Bit row 3
+              DEFB  0x51,0x41,0x5A,0x31,0x20,0x30,0x50,0x3B ; Bit row 4
+              DEFB  0x52,0x46,0x56,0x34,0x4D,0x37,0x55,0x4A ; Bit row 5
+
+; Key codes with SHIFT (incl. semigraphics)
+KEYBOARD_CODES_SHIFT:
+              DEFB  0x8C,0x89,0x00,0x25,0x5E,0x26,0x83,0x86 ; Bit row 0
+              DEFB  0x8D,0x82,0x00,0x22,0x3E,0x29,0x5B,0x3F ; Bit row 1
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x3D,0x0D,0x2A ; Bit row 2
+              DEFB  0x8B,0x84,0x00,0x23,0x3C,0x28,0x85,0x2F ; Bit row 3
+              DEFB  0x8E,0x81,0x80,0x21,0x20,0x40,0x5D,0x2B ; Bit row 4
+              DEFB  0x87,0x88,0x00,0x24,0x5C,0x27,0x8A,0x8F ; Bit row 5
+
+; Key codes with CTRL (incl. CMD tokens)
+KEYBOARD_CODES_CTRL:
+              DEFB  0xCA,0x8D,0xB5,0xB4,0x97,0x8E,0x95,0x84 ; Bit row 0
+              DEFB  0xBD,0xCC,0xB1,0xB9,0x1B,0x8B,0x8C,0x15 ; Bit row 1
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x01,0x00,0x00 ; Bit row 2
+              DEFB  0x87,0x8A,0xB3,0x9C,0x09,0xBB,0x89,0xBC ; Bit row 3
+              DEFB  0x81,0x9D,0xE5,0xBA,0x0A,0x88,0xB2,0x7F ; Bit row 4
+              DEFB  0x92,0x91,0xAF,0x98,0x08,0x80,0x8F,0x93 ; Bit row 5
+
+; Function key codes (with CTRL+ENTER)
+KEYBOARD_CODES_FUNCTION:
+              DEFB  0xFA,0x94,0x9E,0xDF,0xBF,0xE0,0xF9,0x83 ; Bit row 0
+              DEFB  0xF5,0xF4,0xA0,0xE1,0x00,0xD9,0xD3,0x00 ; Bit row 1
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x01,0x00,0x00 ; Bit row 2
+              DEFB  0xF3,0x90,0x96,0xE3,0x00,0xDD,0xD2,0xC6 ; Bit row 3
+              DEFB  0xF7,0xF6,0xDB,0xE2,0x00,0xD8,0xCB,0x00 ; Bit row 4
+              DEFB  0xF8,0xDE,0xC1,0xE4,0x00,0xD7,0xC9,0x82 ; Bit row 5
+
+; Tokens that append '(' on output
+TOKEN_APPEND_PAREN:
+              DEFB  0xE2,0xE1,0xE3,0xE4,0xDF,0xE0,0xD7,0xDD ; Token row 0
+              DEFB  0xD9,0xD8,0xF7,0xF5,0xF3,0xF8,0xF7,0xF9 ; Token row 1
+              DEFB  0x9D,0xF6,0xF4,0xDE,0xE5,0xFA ; Token row 2
+
+; Printer semigraphics output table
+; (2 bytes per character)
+PRINTER_GRAPHICS_TABLE:
+              DEFB  0x80,0x80,0x80,0xB8,0xB8,0x80,0xB8,0xB8 ; Char 0x80
+              DEFB  0x80,0x87,0x80,0xBF,0xB8,0x87,0xB8,0xBF ; Char 0x84
+              DEFB  0x87,0x80,0x87,0xB8,0xBF,0x80,0xBF,0xB8 ; Char 0x88
+              DEFB  0x87,0x87,0x87,0xBF,0xBF,0x87,0xBF,0xBF ; Char 0x8C
+
+; SOUND frequency table
+; (2-byte value per note)
+SOUND_FREQ_TABLE:
+              DEFW  0x0272,0x024F,0x022E,0x020E,0x01F1,0x01D5,0x01B7,0x019E ; A2-E3
+              DEFW  0x0186,0x0170,0x015B,0x0148,0x0135,0x0123,0x0113,0x0103 ; F3-C#4
+              DEFW  0x00F4,0x00E6,0x00D9,0x00CD,0x00C1,0x00B6,0x00AB,0x00A1 ; C#4-G4
+              DEFW  0x0098,0x008F,0x0087,0x007F,0x0078,0x0070,0x006A ; A4-D5
+
+; Restore character at cursor position
+; (part of screen output routine)
+CURSOR_CHAR_RESTORE:
+              ld    b,a            ; Output character in B
+              ld    a,(0x783C)     ; Load character at cursor position
+              ld    hl,(CURS_ADDR) ; Load cursor address
+              ld    (hl),a         ; Write character
+              ld    a,b            ; Restore output character in A
+              ret                  ; Return
+
+; Cursor address one line back
+CURSOR_LINE_BACK:
+              ld    bc,RST20_VEC   ; Line length
+              or    a              ; Clear carry
+              sbc   hl,bc          ; Cursor address minus one line
+              ld    (CURS_ADDR),hl ; Store in cursor pointer
+              ret                  ; Return
+
+; SOUND duration multipliers
+; (1 byte per input code 1-9)
+; SOUND_DURATION_MULT: (defined in symbols.sym)
+              DEFB  0x01,0x02,0x03,0x04,0x06,0x08,0x0C,0x10 ; A2-E3
+              DEFB  0x18           ; Data bytes 0x18
+
+; Output character to screen, printer or cassette.
+CHAR_OUTPUT_DISPATCH:
+              push  bc             ; save BC
+              ld    c,a            ; store character in C
+              call  0x79C1         ; RAM expansion output (RET)
+              ld    a,(0x789C)     ; load output flag
+              or    a              ; and test
+              ld    a,c            ; character back to A
+              pop   bc             ; restore BC
+              jp    m,TAPE_CMD_WRITE ; Cassette? yes - continue at 3B54H
+              jr    nz,PRINTER_OUT_CHAR ; Printer? yes - to printer output
+
+; Output a character to the screen
+SCREEN_OUT_CHAR:
+              push  de             ; save registers
+              push  af             ; Push af
+              push  bc             ; Push bc
+              push  hl             ; Push hl
+              call  OUT_BUF_CHAR   ; call output routine
+              pop   hl             ; restore registers
+              pop   bc             ; Pop bc
+              nop                  ; No operation
+              nop                  ; No operation
+              pop   af             ; Pop af
+              pop   de             ; Pop de
+              ret                  ; done
+
+; Determine cursor position in line
+; not used on LASER 110-310
+CURSOR_COL_GET:
+              ld    a,(0x783D)     ; Load a from (0x783D)
+              and   0x08           ; AND A with 0x08
+              ld    a,(CURS_ADDR)  ; Load a from (0x7820)
+              jr    z,@L1          ; Relative jump if z to $+5
+              rrca                 ; Rotate A right
+              and   0x1F           ; AND A with 0x1F
+@L1:
+              and   0x1F           ; AND A with 0x1F
+              ret                  ; Return
+
+; Keyboard query
+KBD_QUERY_WRAP:
+              call  0x79C4         ; RAM expansion output (RET)
+              push  de             ; save DE
+              call  KBD_QUERY      ; evaluate keyboard
+              pop   de             ; restore DE
+              ret                  ; Return
+
+; Table of basic time values for each individual note of the SOUND command.
+; SOUND_TIME_VALUES: (defined in symbols.sym)
+              DEFB  0x0A,0x0B,0x0C,0x0C,0x0D,0x0E,0x0F,0x0F ; A2-E3
+              DEFB  0x10,0x11,0x12,0x13,0x15,0x16,0x17,0x19 ; F3-C4
+              DEFB  0x1A,0x1C,0x1D,0x1F,0x21,0x23,0x25,0x27 ; C#4-G#4
+              DEFB  0x29,0x2C,0x2E,0x31,0x34,0x35,0x3A ; A4-D#5
+
+; OK and error message of the VERIFY command
+              DEFM  "OK"           ; \
+              DEFB  0x0D,0x00      ; Data bytes 0x0D,0x00
+              DEFM  "ERROR"        ; \
+              DEFB  0x0D,0x00      ; Data bytes 0x0D,0x00
+
+; Output flag to screen.
+; CR on printer, if not at start of line
+OUTPUT_SCREEN_SELECT:
+              xor   a              ; output flag to screen
+              ld    (0x789C),a     ; Load (0x789C) from a
+              ld    a,(0x789B)     ; printer position in line
+              or    a              ; = 0?
+              ret   z              ; yes - done
+
+; Output carriage return to printer
+              ld    a,0x0D         ; load CR
+              push  de             ; save DE
+              call  PRINTER_OUT_CHAR ; output CR
+              pop   de             ; restore DE
+              ret                  ; Return
+
+; Output character to printer.
+PRINTER_OUT_CHAR:
+              push  af             ; save registers
+              push  de             ; Push de
+              push  bc             ; Push bc
+              ld    c,a            ; character in C
+              ld    e,0x00         ; E = 0
+              cp    0x0C           ; is it a Form Feed?
+              jr    z,@L1          ; yes!
+              cp    0x0A           ; is it a Line Feed?
+              jr    nz,@L2         ; no!
+              ld    a,0x0D         ; yes, replace with carriage return
+              ld    c,a            ; and in C
+@L2:
+              cp    0x0D           ; is it a carriage return?
+              jr    z,@L1          ; yes!
+              ld    a,(0x789B)     ; load print head position
+              inc   a              ; +1
+              ld    e,a            ; in E
+@L1:
+              ld    a,e            ; save new position (CR=0)
+              ld    (0x789B),a     ; Load (0x789B) from a
+              ld    a,c            ; character to be output in A
+              call  PRN_OUT_DCB    ; print character
+              pop   bc             ; restore register contents
+              pop   de             ; Pop de
+              pop   af             ; Pop af
+              ret                  ; done
+
+; Call driver routines via the Device Control Block
+DCB_DISPATCH:
+              push  hl             ; save registers
+              push  ix             ; Push ix
+              push  de             ; DCB address in IX
+              pop   ix             ; Pop ix
+              push  de             ; and on stack
+              ld    hl,0x03DD      ; return address on stack
+              push  hl             ; Push hl
+              ld    c,a            ; character to C
+              ld    a,(de)         ; load DCB identifier (1st byte)
+              and   b              ; AND with specified type
+              cp    b              ; correct type?
+              jp    nz,0x7833      ; no, return via RAM 7833H
+              cp    0x02           ; set carry for inputs
+              ld    l,(ix+0x01)    ; load driver address from DCB
+              ld    h,(ix+0x02)    ; Load h from (ix+0x02)
+              jp    (hl)           ; jump to driver
+              pop   de             ; restore registers
+              pop   ix             ; Pop ix
+              pop   hl             ; Pop hl
+              pop   bc             ; Pop bc
+              ret                  ; done
+
+; Read a line from the keyboard.
+; The line is read until the RETURN or BREAK key is pressed, displayed on the 
+; screen and then transferred to the I/O buffer.
+; RDLINE: (defined in symbols.sym)
+              ld    hl,FLAG2       ; initialization flag for
+              set   5,(hl)         ; set buffered output.
+              ld    hl,(CURS_ADDR) ; load cursor address
+              call  0x0053         ; save character at cursor position
+              ld    a,h            ; cursor at the beginning of the last line?
+              cp    0x71           ; Compare A with 0x71
+              jr    nz,@L1         ; no
+              ld    a,l            ; Load a from l
+              cp    0xE0           ; Compare A with 0xE0
+              jr    nz,@L1         ; no
+              ld    a,(LINE_STATUS) ; check status of 1st line
+              or    a              ; = continuation line?
+              jr    nz,@L1         ; no!
+              ld    a,0x0D         ; scroll image up one line
+              call  OUT_BUF_CHAR   ; Call 0x308B
+@L1:
+              ld    b,c            ; length of leading text in B
+              push  bc             ; on stack (B=C)
+              ld    hl,FLAG2       ; address Flag 2
+              res   0,(hl)         ; reset CR flag
+              res   2,(hl)         ; reset BREAK flag
+@L2:
+              bit   0,(hl)         ; wait until CR flag is set
+              jr    z,@L2          ; Relative jump if z to $-2
+
+; Determine starting address of input line
+              ld    a,(TTYPOS)     ; load column in input line
+              ld    c,a            ; in BC
+              xor   a              ; Clear A
+              ld    (TTYPOS),a     ; column counter = 0 (start of line)
+              ld    b,a            ; Load b from a
+              ld    hl,(CURS_ADDR) ; load cursor address
+              sbc   hl,bc          ; - column = start of line
+              ld    (CURS_ADDR),hl ; back to cursor pointer
+
+; Load buffer and line address
+              ld    de,0x79E8      ; starting address of I/O buffer
+              pop   bc             ; character counter of leading text
+              ld    hl,FLAG2       ; address Flag 2
+              bit   4,(hl)         ; is this an INPUT command?
+              ld    hl,(CURS_ADDR) ; load starting address of line
+              jr    z,@L3          ; no INPUT cmd, continue at 471H
+
+; For INPUT set text pointer after given text
+              push  bc             ; save registers
+              push  hl             ; Push hl
+              call  GET_LINE_STATUS ; determine status of line
+              pop   hl             ; reload HL + BC
+              pop   bc             ; Pop bc
+              or    a              ; continuation line? (status=00)
+              jr    nz,@L4         ; no!
+              ld    a,l            ; line address in HL - 1 line
+              sub   0x20           ; Subtract 0x20 from A
+              ld    l,a            ; Load l from a
+              ld    a,h            ; Load a from h
+              sbc   a,0x00         ; Subtract 0x00 with carry from a
+              ld    h,a            ; Load h from a
+@L4:
+              ld    c,b            ; number of leading characters
+@L6:
+              ld    a,(de)         ; pointer after leading text
+              cp    (hl)           ; compare if not changed
+              jr    nz,@L5         ; not equal, stop
+              inc   hl             ; screen pointer + 1
+              inc   de             ; buffer pointer + 1
+              djnz  @L6            ; done?
+              push  bc             ; if equal, remember length
+              jr    @L7            ; continue at 0451
+@L5:
+              ld    bc,START       ; unequal, length = 0
+              push  bc             ; on the stack
+@L7:
+              push  hl             ; save HL
+              call  GET_LINE_STATUS ; read status of line
+              pop   hl             ; reload HL + BC
+              pop   bc             ; Pop bc
+              push  bc             ; remember length again
+              cp    0x80           ; single line?
+              jr    z,@L8          ; yes!
+              ld    a,0x40         ; max characters = 64 - lead
+              sub   c              ; Subtract c from A
+              ld    b,a            ; Load b from a
+              pop   de             ; number of leading characters in stack
+              ld    e,0x00         ; set to 0
+              push  de             ; Push de
+              jr    @L9            ; take 2 lines
+@L8:
+              ld    b,0x20         ; take 1 line
+              ld    hl,(CURS_ADDR) ; load text start address
+@L9:
+              ld    de,0x79E8      ; I/O buffer address
+              jp    0x3EA8         ; check background color
+
+; Determine text starting address and max length, if not INPUT command
+@L3:
+              ld    bc,START       ; set leading text length = 0
+              push  bc             ; on stack
+              push  hl             ; save HL
+              call  GET_LINE_STATUS ; determine status of line
+              pop   hl             ; reload HL
+              cp    0x80           ; single line?
+              jr    z,@L10         ; yes!
+              cp    0x81           ; 2 lines?
+              jr    z,@L11         ; yes!
+              ld    bc,RST20_VEC   ; for continuation line, back one line
+              or    a              ; Test A
+              sbc   hl,bc          ; Subtract bc with carry from hl
+@L11:
+              ld    b,0x40         ; take 2 lines
+              jr    @L12           ; Relative jump to $+4
+@L10:
+              ld    b,0x20         ; take 1 line
+@L12:
+              ld    a,(0x7818)     ; check background color
+              or    a              ; 0 = green, 1 = black
+              jp    z,RDLINE_READ_GREEN_BG ; if green continue at 3E40H
+
+; Transferring data from screen to I/O buffer
+@L19:
+              ld    a,(hl)         ; load character from screen
+              cp    0x40           ; graphics or inverse?
+              jp    c,0x04AE       ; no, take it
+              pop   bc             ; if not INPUT, then graphics and inverse are only allowed in str
+              ld    de,0x04A4      ; return address in stack
+              push  de             ; Push de
+              push  bc             ; Push bc
+              jp    0x0502         ; check text end identifier (BREAK?)
+              ret   c              ; BREAK, back to BASIC
+              ld    hl,0x3E1A      ; text \
+              call  OUTSTR         ; output
+              jp    RDLINE         ; back to line entry
+              cp    0x22           ; string identifier?
+              jr    nz,@L13        ; no, continue
+              ld    (de),a         ; character in I/O buffer
+              inc   hl             ; screen address + 1
+              inc   de             ; buffer address + 1
+              dec   b              ; character counter -1
+              jr    z,@L14         ; if 0, end takeover
+@L17:
+              ld    a,(hl)         ; load character from screen
+              cp    0x40           ; normal text character?
+              jp    c,0x04C9       ; yes!
+              cp    0x80           ; inverse text character?
+              jp    c,0x04C5       ; yes!
+              and   0x8F           ; graphics character, clear bits 4,5,6
+              or    0x80           ; set bit 7
+              jr    @L15           ; Relative jump to $+21
+              cp    0x22           ; string delimiter '\
+              jr    nz,@L16        ; no!
+              push  hl             ; save HL
+              ld    hl,FLAG2       ; address Flag 2
+              bit   4,(hl)         ; INPUT command?
+              pop   hl             ; reload HL
+              jr    z,@L13         ; no - from now on graphics and inverse not allowed.
+@L16:
+              bit   5,a            ; character in real ASCII code
+              jr    nz,@L15        ; convert, e.g. 'A' from 01 to 41
+              or    0x40           ; affects codes 00 - 1FH
+@L15:
+              ld    (de),a         ; character in I/O buffer
+              inc   hl             ; screen address + 1
+              inc   de             ; buffer address + 1
+              djnz  @L17           ; counter - 1
+              jr    @L14           ; = 0, then done
+@L13:
+              bit   5,a            ; character in real ASCII code
+              jr    nz,@L18        ; convert, e.g. 'C' from 03 to 43
+              or    0x40           ; affects codes 00 - 1FH
+@L18:
+              ld    (de),a         ; character in I/O buffer
+              inc   hl             ; screen address + 1
+              inc   de             ; buffer address + 1
+              djnz  @L19           ; counter - 1
+
+; Finalize buffer after transfer
+@L14:
+              dec   de             ; eliminate blanks at buffer end
+              ld    a,d            ; at buffer start?
+              cp    0x79           ; Compare A with 0x79
+              jr    nz,@L20        ; no
+              ld    a,e            ; Load a from e
+              cp    0xE8           ; Compare A with 0xE8
+              jp    c,0x04FF       ; yes, done
+@L20:
+              ld    a,(de)         ; load character
+              cp    0x20           ; = blank?
+              jr    z,@L14         ; yes, further back
+              inc   de             ; buffer end with X'00'
+              xor   a              ; mark it
+              ld    (de),a         ; Load (de) from a
+
+; Output one or two blank lines by line status
+              call  GET_LINE_STATUS ; determine line status
+              ld    hl,(CURS_ADDR) ; load cursor pointer
+              cp    0x81           ; 2 lines?
+              call  0x0053         ; save character from cursor position.
+              jr    nz,@L21        ; single line
+              xor   a              ; 1 blank line output
+              call  OUT_BUF_CHAR   ; Call 0x308B
+@L21:
+              xor   a              ; 1 blank line output
+              call  OUT_BUF_CHAR   ; Call 0x308B
+              ld    a,(0x7838)     ; load Flag 1
+              and   0xFD           ; reset INVERSE flag
+              ld    (0x7838),a     ; Flag 1 back
+              ld    hl,FLAG2       ; address Flag 2
+              bit   2,(hl)         ; BREAK flag set?
+              jr    z,@L22         ; no!
+              ld    a,0x01         ; BREAK, A=1
+              scf                  ; + set carry
+              jr    @L23           ; Relative jump to $+3
+@L22:
+              xor   a              ; no BREAK, A=0
+
+; Reset input command flag and continue
+@L23:
+              ld    hl,FLAG2       ; address Flag 2
+              res   4,(hl)         ; reset INPUT-Cmd flag
+              ld    hl,0x79E8      ; address I/O buffer
+              pop   bc             ; to start of input
+              push  af             ; save BREAK identifier
+              add   hl,bc          ; Add hl,bc
+              jp    BUF_BLANK_IF_EMPTY ; continue at 3E29H
+
+; INPUT helper: read one line into I/O buffer
+@L24:
+              ld    a,(0x7AAF)     ; wait until text output finished.
+              or    a              ; 7AAFH contains number of characters in
+              jr    nz,@L24        ; print buffer; if 0 = empty
+              ld    b,0x40         ; clear I/O buffer (length 64)
+              ld    hl,0x79E8      ; buffer starting address
+              ld    a,0x20         ; space in A
+@L25:
+              ld    (hl),a         ; transfer to buffer
+              inc   hl             ; buffer address + 1
+              djnz  @L25           ; counter - 1, if 0 - done!
+              xor   a              ; 0 in A
+              ld    (hl),a         ; mark buffer end with X'00'.
+              call  GET_LINE_STATUS ; determine line status
+              or    a              ; continuation line?
+              ld    a,(TTYPOS)     ; load column counter
+              jr    nz,@L26        ; no continuation line!
+              add   a,0x20         ; add one line for continuation line.
+@L26:
+              ld    c,a            ; transfer column counter to BC
+              xor   a              ; set B = 0
+              ld    b,a            ; Load b from a
+              ld    hl,(CURS_ADDR) ; load cursor pointer
+              sbc   hl,bc          ; - column = start of line
+              ld    de,0x79E8      ; load I/O buffer address
+              push  bc             ; remember column counter
+              ldir                 ; existing text from line to buffer
+              pop   bc             ; reload column counter
+              ld    hl,FLAG2       ; address Flag 2
+              set   4,(hl)         ; set INPUT-Cmd flag
+              call  RDLINE         ; read line
+              ret                  ; Return
+
+; RUN command for CRUN auto-start
+              DEFM  "RUN"          ; Data text 'RUN\00'
+              DEFB  0x00
+
+; Dead code block, no caller next 25 bytes
+              DEFB  0xC4,0x33,0x32,0xCD,0xA3,0x1A,0xCD,0xD8
+              DEFB  0x17,0xCD,0x0D,0x19,0xCA,0x5A,0x12,0xCD
+              DEFB  0x49,0x1F,0x38,0x18,0xEF,0x3A,0x38,0x04
+              DEFB  0xDD
+
+; Printer Driver
+              ld    a,c            ; Load character to be output
+              or    a              ; Is this zero?
+              jr    z,@L27         ; yes, just determine printer status
+              cp    0x0B           ; Page feed?
+              jr    z,@L28         ; yes - execute
+              cp    0x0C           ; conditional page feed?
+              jr    nz,@L29        ; no!
+              xor   a              ; only executed if number of
+              or    (ix+0x03)      ; lines/page is not 0
+              jr    z,@L29         ; else output 0C to printer
+@L28:
+              ld    a,(ix+0x03)    ; lines/page
+              sub   (ix+0x04)      ; - number of printed lines
+              ld    b,a            ; in B as skip counter
+@L30:
+              call  PRN_CR_LF      ; output Carriage-Return + Line Feed
+              djnz  @L30           ; until new page
+              jr    @L31           ; Relative jump to $+20
+@L29:
+              call  0x3AB6         ; character output
+              ld    a,c            ; reload character
+              cp    0x0D           ; was that a CR?
+              ret   nz             ; no, done
+              inc   (ix+0x04)      ; increment line counter in DCB
+              ld    a,(ix+0x04)    ; at the beginning of a new page?
+              cp    (ix+0x03)      ; (line counter - lines/page)
+              ld    a,c            ; character back in A
+              ret   nz             ; no new page - done
+@L31:
+              ld    (ix+0x04),0x00 ; line counter = 0
+              ret                  ; Return
+@L27:
+              in    a,(0x00)       ; determine printer status
+              and   0x01           ; only BUSY is checked
+              ret                  ; Return
+
+; Clear 4-byte graphics print buffer
+PRN_GFXBUF_CLEAR:
+              push  bc             ; save BC + HL
+              push  hl             ; Push hl
+              ld    b,0x04         ; counter = 4
+              ld    hl,SOUND_NOTE_VALUE ; load buffer address
+@L1:
+              ld    (hl),a         ; transfer A to buffer
+              inc   hl             ; buffer address + 1
+              djnz  @L1            ; counter - 1 = 0? yes - done!
+              pop   hl             ; restore registers
+              pop   bc             ; Pop bc
+              ret                  ; Return
+
+; Part of the keyboard query
+; Handles the pressing of a second key before the first one has been released 
+; (Rollover)
+; In Flag 1 (7838H), bits 3 and 4 are used to indicate the status of the two 
+; keyboard buffers B1 (7836H) and B2 (7837H).
+; Bit4 Bit3 Status
+; 0 0 : B1 and B2 are not pressed
+; 0 1 : B1 pressed, B2 not pressed
+; 1 0 : B1 not pressed, B2 pressed
+; 1 1 : B1 and B2 pressed
+KBD_ROLLOVER:
+              ld    hl,0x7838      ; address Flag 1
+              bit   2,(hl)         ; function flag set?
+              jr    z,@L1          ; no - continue at 05F3H
+              ld    d,a            ; save key code
+              ld    a,(0x783A)     ; load timer value
+              or    a              ; = 0?
+              jr    z,@L2          ; yes - continue at 05F4H
+              inc   a              ; timer value + 1
+              ld    (0x783A),a     ; store back
+              cp    0x2A           ; time elapsed? (approx. 0.84 sec)
+              jr    z,@L3          ; yes!
+              xor   a              ; clear character
+              ret                  ; and back
+@L3:
+              res   2,(hl)         ; clear function flag
+              xor   a              ; clear character
+              ret                  ; back
+@L1:
+              ld    d,a            ; save character in D
+@L2:
+              ld    hl,0x7838      ; address Flag 1
+              ld    a,(hl)         ; load into A
+              and   0x18           ; test bits 3 and 4
+              jr    nz,@L4         ; bit 3 and/or bit 4 set
+              set   3,(hl)         ; set bit 3
+              xor   a              ; clear B2
+              ld    (0x7837),a     ; Load (0x7837) from a
+              ld    a,d            ; reload character
+              ld    (0x7836),a     ; and enter in B1
+              ret                  ; only one key pressed - done!
+
+; Key was held
+@L4:
+              bit   4,(hl)         ; already two keys in the buffer?
+              jr    nz,@L5         ; yes!
+              ld    a,(0x7836)     ; load character from B1
+              cp    d              ; = pressed key?
+              jr    nz,@L6         ; no, a new one
+              ld    bc,(0x7842)    ; load row/column counter
+              ld    hl,(0x7844)    ; load matrix address
+              ld    a,e            ; content of matrix row
+              call  0x2F35         ; check remaining keys
+              cp    d              ; same as before?
+              jp    z,KBD_REPEAT   ; yes, for key repeat
+              cp    0x00           ; no further one?
+              jp    z,KBD_REPEAT   ; yes, for key repeat
+@L7:
+              ld    hl,0x7838      ; address Flag 1
+              set   3,(hl)         ; set both status bits 3+4
+              set   4,(hl)         ; Set bit 4 of (hl)
+              res   2,(hl)         ; reset function flag
+              ld    (0x7837),a     ; character in B2
+              ret                  ; and back
+@L6:
+              ld    a,d            ; new key code in A
+              jr    @L7            ; enter in B2
+
+; Two keys already registered
+@L5:
+              ld    a,(0x7836)     ; load character from B1
+              cp    d              ; = new key code?
+              jr    z,@L8          ; yes!
+              ld    a,(0x7837)     ; load character from B2
+              cp    d              ; = new key code?
+              jr    z,@L8          ; yes!
+              xor   a              ; 3 keys - yuck
+              ret                  ; back with A = 0
+@L8:
+              ld    bc,(0x7842)    ; load row/column counter
+              ld    hl,(0x7844)    ; load matrix address
+              ld    a,e            ; load content of matrix row
+              call  0x2F35         ; continue searching matrix
+              cp    d              ; same key?
+              jr    z,@L9          ; yes!
+              cp    0x00           ; no further key?
+              jp    nz,KBD_REPEAT  ; yes - for key repeat
+@L9:
+              ld    hl,0x7838      ; address Flag 1
+              set   3,(hl)         ; set status flag for B1
+              res   4,(hl)         ; clear status flag for B2
+              ld    a,(0x7836)     ; load character from B1
+              cp    d              ; = entered character?
+              jr    nz,@L10        ; no!
+@L11:
+              xor   a              ; clear B2
+              ld    (0x7837),a     ; Load (0x7837) from a
+              ret                  ; back
+@L10:
+              ld    a,(0x7837)     ; transfer B2 to B1
+              ld    (0x7836),a     ; Load (0x7836) from a
+              jr    @L11           ; clear B2
+              set   2,(ix+0x09)    ; Set bit 2 of (ix+0x09)
+
+; BASIC - Initialization Part 1
+BASIC_INIT_1:
+              nop                  ; starts well
+              nop                  ; No operation
+@L1:
+              ld    hl,RAM_VECTOR_BLOCK ; ROM 6D2 - 707 into
+              ld    de,0x7800      ; RAM 7800 - 7835
+              ld    bc,0x0036      ; transfer
+              ldir                 ; Execute ldir
+              dec   a              ; the whole 128x
+              dec   a              ; why ???????
+              jr    nz,@L1         ; probably burn-in !!!!!
+              ld    b,0x27         ; clear the next 39 bytes
+@L2:
+              ld    (de),a         ; (7836 - 785C)
+              inc   de             ; Increment de
+              djnz  @L2            ; Decrement B and jump if not zero to $-2
+              jp    BASIC_INIT_2   ; to BASIC - initialization T. 2
+
+; BASIC - Initialization Part 3
+; Check for external ROM cassette
+BASIC_INIT_3:
+              ld    hl,0x4000      ; 1st possibility at 4000H
+              call  ROM_CART_CHECK ; check there
+              ld    hl,0x6000      ; 2nd possibility at 6000H
+              call  ROM_CART_CHECK ; check
+              ld    hl,0x8000      ; 3rd possibility at 8000H
+              call  ROM_CART_CHECK ; check
+              ei                   ; no insert - interrupts on
+              jp    MAIN_LOOP      ; to BASIC - main loop
+
+; ROM insert must begin with the byte sequence AA 55 E7 18
+ROM_CART_CHECK:
+              ld    a,0xAA         ; ROM insert must begin with the
+              cp    (hl)           ; byte sequence AA 55 E7 18
+              inc   hl             ; next byte
+              ret   nz             ; was nothing already
+              cpl                  ; form 2nd value (55)
+              cp    (hl)           ; equal?
+              inc   hl             ; next byte
+              ret   nz             ; unequal!
+              ld    a,0xE7         ; 3rd value = E7
+              cp    (hl)           ; is that correct?
+              inc   hl             ; next byte
+              ret   nz             ; no, not that either
+              cpl                  ; form 4th value (18)
+              cp    (hl)           ; is this one correct too?
+              inc   hl             ; next byte
+              ret   nz             ; no - no insert
+              ei                   ; interrupts on
+              jp    (hl)           ; jump to ROM insert
+              ld    c,0x02         ; Load c from 0x02
+              call  0x1A59         ; Call 0x1A59
+              call  0x34B8         ; Call 0x34B8
+              call  0x18E3         ; Call 0x18E3
+              jr    z,$-62         ; Relative jump if z to $-62
+              rst   0x28           ; Call restart vector 0x28
+              inc   l              ; Increment l
+              jr    z,$+22         ; Relative jump if z to $+22
+              call  0x34F1         ; Call 0x34F1
+              ld    bc,MAIN_LOOP_ENTRY ; load address of main loop
+              jp    0x19AE         ; init BASIC variables and pointers.
+
+; The following area from 6D2 to 707 is transferred to the RAM area from 7800 
+; to 7835
+; Restart Vectors
+RAM_VECTOR_BLOCK:
+              jp    SYNCHR         ; RST 8H (compare 1 character)
+              jp    CHRGTR         ; RST 10H (next character)
+              jp    DCOMPR         ; RST 18H (compare HL/DE)
+              jp    0x25D9         ; RST 20H (test data type)
+              ret                  ; RST 28H
+              nop                  ; No operation
+              nop                  ; No operation
+              ret                  ; RST 30H
+              nop                  ; No operation
+              nop                  ; No operation
+              ei                   ; RST 38H (Interrupt)
+              ret                  ; Return
+              nop                  ; No operation
+
+; Keyboard - Device Control Block
+              DEFB  0x01           ; DCB type
+              DEFW  0x2EF4         ; Address of the Driver
+              DEFB  0x00,0x00,0x00 ; stage 3 bytes
+              DEFM  "KI"
+
+; Screen - Device Control Block
+; not used except for the cursor address.
+              DEFB  0x00           ; DCB type (unknown)
+              DEFW  0x0000         ; Used by SET, RESET, and POINT
+              DEFW  0x7000         ; Cursor Pointer
+              DEFB  0x00,0x00,0x00
+
+; Printer - Device Control Block
+              DEFB  0x06           ; DCB type
+              DEFW  0x058D         ; printer driver address
+              DEFB  0x43           ; Lines per Page+1
+              DEFB  0x00           ; line counter (next line stage 1 byte)
+              DEFB  0x00
+              DEFM  "PR"           ; Printer Name
+              jp    0x5000         ; not used
+              rst   0              ; not used
+              nop                  ; No operation
+              nop                  ; No operation
+
+; Entry for wrong DCB type
+              ld    a,0x00         ; entry for wrong DCB type
+              ret                  ; in the DCB call routine
+
+; Addition and subtraction with single precision
+; Various entry points according to the required function.
+FP_ADD_HALF:
+              ld    hl,FHALF       ; address of constant 0.5
+              call  MOVRM          ; load constant into Y then add to X
+              jr    FP_ADD_X_PLUS_Y ; jump to addition
+FP_SUB_HALF:
+              call  MOVRM          ; load constant into Y
+FP_SUB_Y_MINUS_X:
+              call  NNEG           ; X = -X
+FP_ADD_X_PLUS_Y:
+              ld    a,b            ; Y = 0? (Exp. Y = 0)
+              or    a              ; Test A
+              ret   z              ; yes, done
+              ld    a,(FAC)        ; X = 0? (Exp. X = 0)
+              or    a              ; Test A
+              jp    z,MOVFR        ; yes, done, X=Y
+              sub   b              ; Exp. Y <= Exp. X?
+              jr    nc,@L1         ; yes
+              cpl                  ; negate Exp.Diff
+              inc   a              ; exchange X with Y
+              ex    de,hl          ; save LSB Y
+              call  PUSHF          ; put X on stack
+              ex    de,hl          ; restore LSB Y
+              call  MOVFR          ; transfer Y to X
+              pop   bc             ; load stack to Y
+              pop   de             ; Pop de
+@L1:
+              cp    0x19           ; Exp.Diff > mantissa (24 bits)
+              ret   nc             ; no, X = X, done
+              push  af             ; save Exp.Diff.
+              call  UNPACK         ; A(7) = 0 if different signs
+              ld    h,a            ; save sign flag
+              pop   af             ; reload Exp.Difference
+              call  SHIFTR         ; shift Y right by this difference
+              or    h              ; signs equal?
+              ld    hl,FACLO       ; LSB X address in HL
+              jp    p,0x0754       ; no, subtract
+
+; Mantissa addition
+              call  0x07B7         ; add mantissas
+              jp    nc,0x0796      ; overflow? no=jump
+              inc   hl             ; pointer to Exp. X
+              inc   (hl)           ; Exp. X + 1
+              jp    z,0x07B2       ; overflow? yes=OV-Error
+              ld    l,0x01         ; shift mantissa of X by 1 bit
+              call  0x07EB         ; right
+              jr    @L2            ; done!
+
+; Mantissa subtraction
+              xor   a              ; Mant. Y - Mant. X to Mant. Y
+              sub   b              ; low order byte (created by shifting)
+              ld    b,a            ; result
+              ld    a,(hl)         ; LSB subtraction
+              sbc   a,e            ; Subtract e with carry from a
+              ld    e,a            ; Load e from a
+              inc   hl             ; next byte
+              ld    a,(hl)         ; subtract
+              sbc   a,d            ; Subtract d with carry from a
+              ld    d,a            ; Load d from a
+              inc   hl             ; MSB subtract
+              ld    a,(hl)         ; Load a from (hl)
+              sbc   a,c            ; Subtract c with carry from a
+              ld    c,a            ; underflow?
+              call  c,NGER         ; invert sign flag
+
+; Normalize
+              ld    l,b            ; res. mant. from CDEB to CDHL
+              ld    h,e            ; Load h from e
+              xor   a              ; shift counter = 0
+@L4:
+              ld    b,a            ; Load b from a
+              ld    a,c            ; MSB Y = 0?
+              or    a              ; Test A
+              jr    nz,@L3         ; no
+              ld    c,d            ; shift Y left by 1 byte
+              ld    d,h            ; H to D
+              ld    h,l            ; L to H
+              ld    l,a            ; L = 0
+              ld    a,b            ; shift counter - 8
+              sub   0x08           ; Subtract 0x08 from A
+              cp    0xE0           ; 32 left shifts? (number = 0)
+              jr    nz,@L4         ; no!
+
+; Set real value = 0
+; FA_ZERO: (defined in symbols.sym)
+              xor   a              ; exponent in X = 0
+              ld    (FAC),a        ; i.e. X = 0
+              ret                  ; Return
+
+; 2nd part of normalization
+              dec   b              ; shift counter - 1
+              add   hl,hl          ; CDHL one bit left (HL * 2)
+              ld    a,d            ; D * 2
+              rla                  ; Rotate A left through carry
+              ld    d,a            ; Load d from a
+              ld    a,c            ; C * 2
+              adc   a,a            ; Add a with carry to a
+              ld    c,a            ; highest bit of Y set?
+@L3:
+              jp    p,0x077D       ; no, continue
+              ld    a,b            ; shift counter to A
+              ld    e,h            ; CDHL back to CDEB
+              ld    b,l            ; Load b from l
+              or    a              ; no shift?
+              jr    z,@L2          ; yes
+              ld    hl,FAC         ; address X exponent
+              add   a,(hl)         ; Exp. X + number of shifts
+              ld    (hl),a         ; = Exp. X. Underflow?
+              jr    nc,FA_ZERO     ; yes! X=0 and back
+              ret   z              ; number of shifts = Exp. X? back!
+
+; Finalize result: round and copy Y to X
+@L2:
+              ld    a,b            ; load LSB Y
+              ld    hl,FAC         ; address X exponent
+              or    a              ; LSB Y(7) = 0?
+              call  m,ROUND        ; no - round Y
+              ld    b,(hl)         ; Exp. X to Exp. Y
+              inc   hl             ; sign flag
+              ld    a,(hl)         ; load
+              and   0x80           ; mask out sign
+              xor   c              ; link with MSB Y (invert)
+              ld    c,a            ; and back to MSB Y
+              jp    MOVFR          ; Y to X as result
+
+; Rounding
+; ROUND: (defined in symbols.sym)
+              inc   e              ; LSB Y + 1
+              ret   nz             ; = 0?, no-done
+              inc   d              ; next byte Y + 1
+              ret   nz             ; = 0?, no-done
+              inc   c              ; MSB Y + 1
+              ret   nz             ; = 0?, no-done
+              ld    c,0x80         ; yes, MSB Y = 80H
+              inc   (hl)           ; exponent X + 1
+              ret   nz             ; = 0?, no-back
+
+; Overflow error
+              ld    e,0x0A         ; error number in E
+              jp    ERROR_HANDLER  ; to error routine
+
+; Single precision mantissa addition
+              ld    a,(hl)         ; LSB X in A
+              add   a,e            ; + LSB Y
+              ld    e,a            ; sum in LSB Y
+              inc   hl             ; X address + 1
+              ld    a,(hl)         ; add next byte
+              adc   a,d            ; Add d with carry to a
+              ld    d,a            ; Load d from a
+              inc   hl             ; HL = MSB X
+              ld    a,(hl)         ; MSB X + MSB Y
+              adc   a,c            ; Add c with carry to a
+              ld    c,a            ; in MSB Y
+              ret                  ; Return
+
+; Negate mantissa Y
+; NGER: (defined in symbols.sym)
+              ld    hl,0x7925      ; invert sign flag
+              ld    a,(hl)         ; Load a from (hl)
+              cpl                  ; Complement A
+              ld    (hl),a         ; Load (hl) from a
+              xor   a              ; A = 0
+              ld    l,a            ; L = 0
+              sub   b              ; LSB Y = 0 - LSB Y
+              ld    b,a            ; Load b from a
+              ld    a,l            ; Load a from l
+              sbc   a,e            ; next byte Y = 0 - next byte Y
+              ld    e,a            ; Load e from a
+              ld    a,l            ; Load a from l
+              sbc   a,d            ; next byte Y = 0 - next byte Y
+              ld    d,a            ; Load d from a
+              ld    a,l            ; Load a from l
+              sbc   a,c            ; MSB Y = 0 - MSB Y
+              ld    c,a            ; Load c from a
+              ret   
+
+; SINGLE PRECISION MATH ROUTINE - "SHIFTR"
+; This routine will shift the number in C/D/E right the number of times
+; held in Register A. The general idea is to shift right 8 places
+; as many times as is possible within the number of times in A,
+; and then jump out to shift single bits once you can't shift 8
+; at a time anymore. Alters everything except Register H.
+SHIFTR:
+              ld    b,0x00         ; LSB of result = 0
+SHIFTR1:
+              sub   0x08           ; shift 8 or more places?
+
+; (none)
+              jr    c,SHFTR2       ; no!
+              ld    b,e            ; shift Y right by one byte
+              ld    e,d
+              ld    d,c
+              ld    c,0x00
+              jr    SHIFTR1
+
+; SINGLE PRECISION MATH ROUTINE - "SHFTR2"
+; This routine will shift the number in C/D/E right the number
+; of times held in Register A, but one byte at a time.
+SHFTR2:
+              add   a,0x09         ; shift count + 1 in L
+              ld    l,a
+SHFTR3:
+              xor   a              ; clear Carry
+SHFTR4:
+              dec   l              ; shift counter - 1
+              ret   z              ; = 0? yes-done
+              ld    a,c            ; MSB Y one bit right
+              rra   
+              ld    c,a
+              ld    a,d            ; next byte Y one bit right
+              rra   
+              ld    d,a
+              ld    a,e            ; next byte Y one bit right
+              rra   
+              ld    e,a
+              ld    a,b            ; LSB Y one bit right
+              rra   
+              ld    b,a
+              jr    SHFTR3         ; continue
+
+; SINGLE PRECISION CONSTANT STORAGE LOCATION - "FONE"
+FONE:
+              nop                  ; = 1
+              nop   
+              nop   
+              add   a,c
+
+; SINGLE PRECISION CONSTANTS STORAGE LOCATION 2 - "LOGCN2"
+LOGCN2:
+              inc   bc             ; number of constants = 3
+              xor   d
+              ld    d,(hl)
+              add   hl,de
+              add   a,b
+              pop   af
+              ld    (0x8076),hl
+              ld    b,l
+              xor   d
+              jr    c,$-124
+
+; LEVEL II BASIC LOG ROUTINE - "FNLOG"
+; Computes the natural log (base E) of the single precision value in
+; WRA1. The result is returned as a single precision value in WRA1.
+FNLOG:
+              call  SIGN           ; argument <= 0?
+              or    a              ; if FAC < 0, then an error
+              jp    pe,0x1E4A      ; yes, Function-Code Error
+              ld    hl,FAC         ; exponent of argument in A
+              ld    a,(hl)         ; get exponent
+              ld    bc,0x8035      ; Y = 0.707092
+              ld    de,0x04F3
+              sub   b              ; offset Exp X in A
+              push  af             ; save
+              ld    (hl),b         ; Exp. X = 0
+              push  de             ; Y on stack
+              push  bc
+              call  FP_ADD_X_PLUS_Y ; X = X + 0.707092
+              pop   bc             ; reload Y with constant
+              pop   de
+              inc   b              ; Exp. Y + 1 (Y = SQR(2))
+              call  0x08A2         ; X = SQR(2) / X
+              ld    hl,FONE        ; load address of constant 1
+              call  FP_SUB_HALF    ; X = 1 - X
+              ld    hl,LOGCN2      ; address of 1st series constant
+              call  POLYN          ; calculate series
+              ld    bc,0x8080      ; Y = -0.5
+              ld    de,START
+              call  FP_ADD_X_PLUS_Y ; X = X - 0.5
+              pop   af             ; exponent of argument
+              call  FADD8          ; X = X + A
+
+; SINGLE PRECISION MULTIPLICATION - "FMLT"
+MULLN2:
+              ld    bc,0x8031      ; Y = LOG(2) approx. 0.693147
+              ld    de,0x7218
+              call  SIGN           ; X = 0?
+FMLT:
+              ret   z              ; yes, done
+              ld    l,0x00         ; flag for exponent processing
+              call  MULDIV         ; process exponents and signs
+              ld    a,c            ; mantissa from Y to 794F...
+              ld    (0x794F),a     ; MSB
+              ex    de,hl          ; LSB
+              ld    (0x7950),hl
+              ld    bc,START       ; Y = clear result register
+              ld    d,b
+              ld    e,b
+              ld    hl,0x0765      ; different return addresses for
+              push  hl             ; 3 passes on stack
+              ld    hl,FMLT2       ; to normalization after 3rd pass
+              push  hl             ; after 1st and 2nd pass
+              push  hl             ; repeat
+FMLT1:
+              ld    hl,FACLO       ; load LSB X address
+FMLT2:
+              ld    a,(hl)         ; LSB X in A
+              inc   hl             ; address next X-byte
+              or    a              ; content = 0?
+              jr    z,@L1          ; yes, shift result 1 byte right
+              push  hl             ; save address pointer
+              ld    l,0x08         ; bit counter = 8
+@L3:
+              rra                  ; shift a bit into carry
+              ld    h,a            ; save A in H
+              ld    a,c            ; load MSB of result
+              jr    nc,@L2         ; bit in carry = 1?
+              push  hl             ; yes! - save HL
+              ld    hl,(0x7950)    ; load LSB of 2nd factor
+              add   hl,de          ; + result LSB
+              ex    de,hl          ; in LSB Y
+              pop   hl             ; reload HL
+              ld    a,(0x794F)     ; load MSB of 2nd factor
+              adc   a,c            ; + result MSB
+@L2:
+              rra                  ; shift result 1 bit right
+              ld    c,a            ; MSB
+              ld    a,d            ; next byte
+              rra   
+              ld    d,a
+              ld    a,e            ; next byte
+              rra   
+              ld    e,a
+              ld    a,b            ; LSB
+              rra   
+              ld    b,a
+              dec   l              ; bit counter - 1
+              ld    a,h            ; reload X-byte
+              jr    nz,@L3         ; bit counter = 0, no-back
+              pop   hl             ; yes - load X-byte address
+              ret                  ; continue
+@L1:
+              ld    b,e            ; result 1 byte right. B = E
+              ld    e,d            ; E = D
+              ld    d,c            ; D = C
+              ld    c,a            ; C = 0
+              ret   
+
+; SINGLE PRECISION MATH ROUTINE - "FDIV"
+FDIV:
+              call  PUSHF          ; save value in X on stack
+              ld    hl,0x0DD8      ; address constant 10
+              call  MOVFM          ; transfer to X
+              pop   bc             ; load former X-value into Y
+              pop   de
+
+; Single Precision Division
+              call  SIGN           ; divisor = 0?
+DV0ERR_JMP:
+              jp    z,DIV_ZERO_ERR_HANDLER ; yes, DIVISION BY ZERO - Error
+
+; X = Y / X
+              ld    l,0xFF         ; Flag for exponent processing for division
+              call  MULDIV         ; Process exponents and signs
+              inc   (hl)           ; Correct exponent result
+              inc   (hl)           ; + 2 (0914 = Exp.Y - Exp.X - 1)
+              dec   hl             ; HL to MSB X
+              ld    a,(hl)         ; X in division subroutine (from 7840H)
+              ld    (FDIVA_ARG),a  ; MSB
+              dec   hl             ; DEC HL
+              ld    a,(hl)         ; Next byte
+              ld    (FDIVB_ARG),a
+              dec   hl             ; DEC HL
+              ld    a,(hl)         ; LSB
+              ld    (FDIVC_ARG),a
+              ld    b,c            ; Transfer Y to B,H,L (dividend)
+              ex    de,hl
+              xor   a              ; Y = 0 (for quotient)
+              ld    c,a
+              ld    d,a
+              ld    e,a
+              ld    (FDIVG_ARG),a  ; MSB divisor = 0 (for shifting)
+FDIV1:
+              push  hl             ; Dividend on stack
+              push  bc
+              ld    a,l            ; Load LSB dividend
+              call  FDIVC          ; Dividend - divisor
+              sbc   a,0x00         ; MSB dividend = carry, underflow?
+              ccf                  ; Complement carry
+              jr    nc,@L1         ; yes - restore subtraction, 0 in quotient
+              ld    (FDIVG_ARG),a  ; MSB dividend in subroutine
+              pop   af             ; Remove dividend from stack
+              pop   af
+              scf                  ; Set carry flag (1 in quotient)
+
+; to skip following 2 POPs
+              DEFB  0xD2           ; JP NC,0E1C1H is never executed.
+@L1:
+              pop   bc
+              pop   hl
+FDIV2:
+              ld    a,c            ; MSB of quotient in A
+              inc   a              ; Test bit 7
+              dec   a
+              rra                  ; Last bit for rounding in bit 7
+              jp    m,0x0797       ; was bit 7 at INC/DEC=1, yes-done
+              rla                  ; Quotient 1 bit to the left
+              ld    a,e            ; Result bit (0 or 1) is
+              rla                  ; shifted in from carry bit
+              ld    e,a
+              ld    a,d
+              rla   
+              ld    d,a
+              ld    a,c
+              rla   
+              ld    c,a
+              add   hl,hl          ; Dividend * 2
+              ld    a,b
+              rla   
+              ld    b,a
+              ld    a,(FDIVG_ARG)  ; = MSB dividend
+              rla   
+              ld    (FDIVG_ARG),a
+              ld    a,c            ; is the result still 0?
+              or    d
+              or    e
+              jr    nz,FDIV1       ; no - continue
+              push  hl             ; Save dividend LSB
+              ld    hl,FAC         ; Address quotient exponent
+              dec   (hl)           ; - 1
+              pop   hl             ; Reload dividend LSB
+              jr    nz,FDIV1       ; Quotient exp. not equal 0 - continue
+              jp    0x07B2         ; Exponent = 0, OVERFLOW - Error
+
+; 0907H-0913H - DOUBLE PRECISION MATH ROUTINE - "MULDVS"
+; This routine is to check for special cases and to add exponents for
+; the FMULT and FDIV routines. Registers A, B, H and L are modified.
+MULDVS:
+              ld    a,0xFF         ; Set flag for division
+MULDVA_SKIP:
+              ld    l,0xAF         ; LD L,0AFH to skip the XOR
+MULDVA:
+              ld    hl,ARG         ; Address MSB Y
+              ld    c,(hl)         ; Sign Y in C
+              inc   hl             ; HL to exponent X
+              xor   (hl)           ; Combine with sign flag
+              ld    b,a            ; Mult: B=Exp.Y Div: B=-Exp.Y-1
+              ld    l,0x00         ; Flag in L = 0
+
+; Entry point: Multiplication, single precision (L=0)
+; MULDIV: (defined in symbols.sym)
+              ld    a,b            ; Exponent Y loaded
+              or    a              ; 0? (i.e. Y = 0)
+              jr    z,MULDV2       ; yes, return to main program immediately
+              ld    a,l            ; Load flag
+              ld    hl,FAC         ; Address Exp. X
+              xor   (hl)           ; Combine with flag
+              add   a,b            ; + Exponent Y
+              ld    b,a            ; Sum after Exponent Y
+              rra                  ; Over- or underflow?
+              xor   b              ; XOR B
+              ld    a,b            ; Load new Exponent Y
+; MULDV1_INTERNAL: (defined in symbols.sym)
+              jp    p,MULDV1       ; Under-/overflow
+              add   a,0x80         ; Add offset
+              ld    (hl),a         ; and save as new exponent X.
+POPHRT:
+              jp    z,0x0890       ; = 0? yes-to main program back
+              call  UNPACK         ; Process sign
+              ld    (hl),a         ; in temporary storage
+DCXHRT:
+              dec   hl             ; Address exponent X
+              ret   
+
+; Exponents over-/underflow
+MLDVEX:
+              call  SIGN           ; Test signs of X
+              cpl                  ; Complement result
+              pop   hl             ; Remove return address from stack
+; MULDV1: (defined in symbols.sym)
+              or    a              ; Was it an underflow?
+; MULDV2: (defined in symbols.sym)
+              pop   hl             ; One more return address from stack
+              jp    p,FA_ZERO      ; Underflow, X=0, RET
+              jp    0x07B2         ; OVERFLOW-Error
+
+; Single Precision Multiplication by 10
+MUL10:
+              call  MOVRF          ; Transfer X to Y
+              ld    a,b            ; Value = 0? (Exp.Y=0)
+              or    a
+              ret   z              ; yes, done
+              add   a,0x02         ; Exp. Y + 2, i.e. Y = Value * 4
+              jp    c,0x07B2       ; at overflow OVERFLOW-Error
+              ld    b,a            ; Exponent back in Y
+              call  FP_ADD_X_PLUS_Y ; X = X + Y, i.e. X = Value * 5
+              ld    hl,FAC         ; Exponent X + 1
+              inc   (hl)           ; i.e. X = Value * 10
+              ret   nz             ; Overflow? no-back
+              jp    0x07B2         ; yes - OVERFLOW-Error
+
+; Test a real number
+SIGN:
+              ld    a,(FAC)        ; Load Exponent X
+              or    a              ; = 0? (X = 0)
+              ret   z
+              ld    a,(FAC_SIGN)   ; Load MSB X
+              cp    0x2F           ; CP 2F - Dummy instruction, elim. CPL
+ICOMPS:
+              rla                  ; Shift sign X into Carry
+SIGNS:
+              sbc   a,a            ; A = 0 - Carry
+              ret   nz             ; X > 0? no - finished
+              inc   a              ; yes, set A = 1
+              ret   
+
+; 8-bit signed integer to single precision conversion
+FLOAT:
+              ld    b,0x88         ; Exponent of result in B
+              ld    de,START       ; Clear for normalization
+
+; Separate entry point
+; FLOATR: (defined in symbols.sym)
+              ld    hl,FAC         ; Address exponent in X
+              ld    c,a            ; Number to convert in C
+              ld    (hl),b         ; Exponent to X
+              ld    b,0x00         ; B=0 for normalization
+              inc   hl             ; Address MSB in X
+              ld    (hl),0x80      ; Sign = '-'
+              rla                  ; Sign of converted number into carry
+              jp    0x0762         ; to normalization
+
+; LEVEL II BASIC ABS() ROUTINE - "FNABS"
+; Computes the absolute value of the FAC. The result is returned
+; as a single precision value in the FAC.
+FNABS:
+              call  VSIGN          ; X > 0?
+              ret   p              ; yes, done
+
+; Invert number in FAC X
+VNEG:
+              rst   0x20           ; Test type of FAC X
+              jp    m,INEG_B       ; integer? yes - continue at 0x0C5B
+              jp    z,TMERR        ; string? yes - TYPE MISMATCH Error
+
+; Invert real number in FAC X
+; NNEG: (defined in symbols.sym)
+              ld    hl,FAC_SIGN    ; Address MSB of FAC X
+              ld    a,(hl)         ; and load
+              xor   0x80           ; Invert sign bit
+              ld    (hl),a         ; write MSB back to FAC X
+              ret   
+
+; SGN function
+FNSGN:
+              call  VSIGN          ; Test FAC X
+
+; Convert A to 16-bit signed integer
+CONIA:
+              ld    l,a            ; Number in L
+              rla                  ; Number < 0?
+              sbc   a,a            ; yes, -1 in A and H
+              ld    h,a            ; no, 0 in A and H
+              jp    MAKINT         ; Transfer HL to FAC X
+
+; Test all numeric types
+VSIGN:
+              rst   0x20           ; Test type
+              jp    z,TMERR        ; String? yes - TYPE MISMATCH Error
+              jp    p,SIGN         ; Single or double precision
+
+; Test integer number
+ISIGNA:
+              ld    hl,(FACLO)     ; Integer number in HL
+
+; 099EH - MATH COMPARE ROUTINE - INTEGER SIGN (HL)
+; Finds the sign of the value held at (HL). Only Register A is altered.
+ISIGN:
+              ld    a,h            ; is it 0?
+              or    l
+              ret   z              ; yes - done
+              ld    a,h            ; no - MSB in A
+              jr    ICOMPS         ; continue at 0x095F
+
+; Transport numbers of different types
+; From FAC X to stack (single precision)
+PUSHF:
+              ex    de,hl          ; Save HL in DE
+              ld    hl,(FACLO)     ; LSB of FAC X in HL
+              ex    (sp),hl        ; swap RET address with HL on stack
+              push  hl             ; push RET address back on stack
+              ld    hl,(FAC_SIGN)  ; MSB X + Exp X in HL
+              ex    (sp),hl        ; swap RET address with HL on stack
+              push  hl             ; push RET address back on stack
+              ex    de,hl          ; Restore content of HL
+              ret   
+
+; Transfer single precision number from RAM to FAC X
+MOVFM:
+              call  MOVRM          ; Transfer number to FAC Y
+
+; Transfer single precision number from FAC Y to FAC X
+MOVFR:
+              ex    de,hl          ; LSB Y in HL, save HL in DE
+              ld    (FACLO),hl     ; Transfer HL to LSB Y
+              ld    h,b            ; MSB Y + Exp Y in HL
+              ld    l,c
+              ld    (FAC_SIGN),hl  ; Store as MSB X and Exp X
+              ex    de,hl          ; Restore content of HL
+              ret   
+
+; Transfer single precision number from FAC X to FAC Y
+MOVRF:
+              ld    hl,FACLO       ; Address LSB of FAC X
+MOVRM:
+              ld    e,(hl)         ; Load LSB
+              inc   hl             ; Next byte
+GETBCD:
+              ld    d,(hl)         ; Load byte
+              inc   hl             ; Next byte
+              ld    c,(hl)         ; Load byte
+              inc   hl             ; Load Exp
+              ld    b,(hl)
+INXHRT:
+              inc   hl             ; HL behind the number
+              ret   
+
+; Transfer single precision number from FAC X to RAM
+MOVMF:
+              ld    de,FACLO       ; X-address in DE
+              ld    b,0x04         ; Number of bytes for single precision
+              jr    MOVE1          ; continue at 0x09D7
+
+; Transfer any type from (HL) to (DE)
+MOVVFM:
+              ex    de,hl          ; Swap destination and source address
+
+; Transfer any type from (DE) to (HL)
+VMOVE:
+              ld    a,(VALTYP)     ; Load type of the number
+VMOVEA:
+              ld    b,a            ; serves as byte counter
+MOVE1:
+              ld    a,(de)         ; Load byte
+              ld    (hl),a         ; and transfer to new area
+              inc   de             ; Addresses + 1
+              inc   hl
+              dec   b              ; Counter - 1
+              jr    nz,MOVE1       ; > 0? yes - back
+              ret                  ; done
+
+; Processing of signs for real numbers
+UNPACK:
+              ld    hl,FAC_SIGN    ; Address MSB of FAC X
+              ld    a,(hl)         ; and load into A
+              rlca                 ; Sign in bit 0 of A
+              scf                  ; Set Carry = 1
+              rra                  ; Sign in Carry, MSB X(7) = 1
+              ld    (hl),a         ; back to MSB of FAC X
+              ccf                  ; Complement sign
+              rra                  ; and into A(7)
+              inc   hl             ; Address HL to sign flag
+              inc   hl
+              ld    (hl),a         ; store complemented sign
+              ld    a,c            ; MSB Y in A
+              rlca                 ; Sign of FAC Y in bit 0 of A
+              scf                  ; Set Carry = 1
+              rra                  ; MSB Y(7) = 1, sign Y in Carry
+              ld    c,a            ; MSB Y back
+              rra                  ; Sign in A(7)
+              xor   (hl)           ; Combine with complemented MSB X
+              ret   
+
+; Transfer any type from FAC Y to FAC X
+; VMOVFA: (defined in symbols.sym)
+              ld    hl,FAC2        ; FAC Y address in HL
+; VMOVFM: (defined in symbols.sym)
+              ld    de,MOVVFM      ; Address of transport routine
+              jr    @L1
+
+; Transfer any type from FAC X to FAC Y
+; VMOVAF: (defined in symbols.sym)
+              ld    hl,FAC2        ; FAC Y address in HL
+              ld    de,VMOVE       ; Address of transport routine
+@L1:
+              push  de             ; Transport routine address on stack
+
+; Determine address of FAC X depending on type
+; VDFACS: (defined in symbols.sym)
+              ld    de,FACLO       ; X-address for Integer, Strings and single precision
+              rst   0x20           ; Test type
+              ret   c              ; Double precision? no - done
+              ld    de,0x791D      ; X-address for double precision
+              ret                  ; done
+
+; Comparison routines
+; Comparison of single precision numbers
+; FCOMP: (defined in symbols.sym)
+              ld    a,b            ; FAC Y = 0?
+              or    a
+              jp    z,SIGN         ; yes - test FAC X and back
+              ld    hl,0x095E      ; Address of test routine on stack
+              push  hl             ; push address
+              call  SIGN           ; FAC X = 0?
+              ld    a,c            ; MSB FAC Y in A
+              ret   z              ; yes - sign of FAC Y = result
+              ld    hl,FAC_SIGN    ; Load address of MSB FAC X
+              xor   (hl)           ; Sign FAC X = Sign FAC Y?
+              ld    a,c            ; MSB FAC Y in A
+              ret   m              ; no, -sign of FAC Y = result
+; FCOMP_SAME_SIGN: (defined in symbols.sym)
+              call  FCOMP2_CORE    ; Comparison for same signs
+
+; Internal
+; FCOMPD: (defined in symbols.sym)
+              rra                  ; Carry in bit 7 of A
+              xor   c              ; if FAC Y negative, invert A(7)
+              ret                  ; done
+; FCOMP2_CORE: (defined in symbols.sym)
+              inc   hl             ; Address of FAC X exponent in HL
+              ld    a,b            ; Load FAC Y exponent
+
+; Comparison for same signs
+; FCOMP2: (defined in symbols.sym)
+              cp    (hl)           ; Exponents equal, check mantissa
+              ret   nz             ; Exponents not equal
+              dec   hl             ; Address MSB
+              ld    a,c            ; MSB of Y
+              cp    (hl)           ; compare with MSB of X
+              ret   nz             ; different? yes - done
+              dec   hl             ; Address middle byte
+              ld    a,d            ; Middle byte of Y
+              cp    (hl)           ; compare with middle byte of X
+              ret   nz             ; different? yes - done
+              dec   hl             ; Address LSB
+              ld    a,e            ; LSB of Y
+              sub   (hl)           ; compare with LSB of X
+              ret   nz             ; different? yes - done
+              pop   hl             ; Balance stack
+              pop   hl             ; Balance stack
+              ret                  ; done
+
+; Comparison of integers
+; DCOMP: (defined in symbols.sym)
+              ld    a,d            ; MSB of first integer
+              xor   h              ; Signs equal?
+              ld    a,h            ; Restore MSB
+; DCOMPS: (defined in symbols.sym)
+              jp    m,ICOMPS       ; no, result determined by sign
+              cp    d              ; MSB of second integer
+; SIGNS_2: (defined in symbols.sym)
+              jp    nz,SIGNS       ; different? yes - done
+              ld    a,l            ; LSB of first integer
+              sub   e              ; compare with LSB of second integer
+              jp    nz,SIGNS       ; different? yes - done
+              ret                  ; done
+
+; Comparison of double precision numbers
+              ld    hl,FAC2        ; Address FAC2
+              call  VMOVE          ; Transfer to FAC2
+
+; Internal
+; XDCOMP: (defined in symbols.sym)
+              ld    de,ARG_EXP     ; Address ARG_EXP
+              ld    a,(de)         ; Load exponent
+              or    a              ; Zero?
+; SIGN_X: (defined in symbols.sym)
+              jp    z,SIGN         ; yes, sign of X determines result
+; FCOMPS: (defined in symbols.sym)
+              ld    hl,0x095E      ; Address of result routine
+              push  hl             ; onto stack
+              call  SIGN           ; Test FAC X
+              dec   de             ; Address ARG_SIGN
+              ld    a,(de)         ; Load sign
+              ld    c,a            ; Save sign
+              ret   z              ; Zero? yes - done
+              ld    hl,FAC_SIGN    ; Address FAC_SIGN
+              xor   (hl)           ; Signs equal?
+              ld    a,c            ; Restore sign of Y
+              ret   m              ; no, sign of Y determines result
+              inc   de             ; Address MSB of Y
+              inc   hl             ; Address MSB of X
+              ld    b,0x08         ; 8 bytes for double precision
+@L2:
+              ld    a,(de)         ; Load byte from Y
+              sub   (hl)           ; compare with byte from X
+              jp    nz,FCOMPD      ; different? yes - done
+              dec   de             ; Address next byte
+              dec   hl             ; Address next byte
+              dec   b              ; Decrement counter
+; DCOMP1: (defined in symbols.sym)
+              jr    nz,@L2         ; more? yes - back
+              pop   bc             ; Balance stack
+              ret                  ; done
+
+; Comparison of X and Y
+              call  XDCOMP         ; Compare X and Y
+              jp    nz,0x095E      ; different? yes - done
+              ret                  ; done
+
+; Convert to integer
+; FRCINT: (defined in symbols.sym)
+              rst   0x20           ; Test type
+              ld    hl,(FACLO)     ; Load integer from FACLO
+              ret   m              ; Integer? yes - done
+              jp    z,TMERR        ; String? yes - error
+              call  nc,CONSD       ; Double precision? yes - convert to single
+; OVERR: (defined in symbols.sym)
+              ld    hl,0x07B2      ; Address of OVERFLOW Error
+              push  hl             ; onto stack
+; CONIS: (defined in symbols.sym)
+              ld    a,(FAC)        ; FAC exponent
+              cp    0x90           ; > 16 bits?
+; CONIS2: (defined in symbols.sym)
+              jr    nc,INT         ; yes - check if -32768
+              call  DROUND         ; Convert to integer
+              ex    de,hl          ; HL = integer
+@L3:
+              pop   de             ; Balance stack
+
+; Transfer HL to FAC X and set type to integer
+; MAKINT: (defined in symbols.sym)
+              ld    (FACLO),hl     ; Store in FACLO
+; VALINT: (defined in symbols.sym)
+              ld    a,0x02         ; Type = Integer
+; CONISD: (defined in symbols.sym)
+              ld    (VALTYP),a     ; Store in VALTYP
+              ret                  ; done
+
+; Test for -32768
+; INT: (defined in symbols.sym)
+              ld    bc,0x9080      ; -32768 in floating point
+              ld    de,START       ; more bytes
+              call  FCOMP          ; Compare with FAC X
+              ret   nz             ; not -32768? yes - back (OVERFLOW)
+              ld    h,c            ; H = 0x80
+              ld    l,d            ; L = 0x00
+              jr    @L3            ; continue at MAKINT
+
+; Force single precision
+; FRCSNG: (defined in symbols.sym)
+              rst   0x20           ; Test type
+              ret   po             ; Single precision? yes - done
+              jp    m,INEG         ; Integer? yes - convert
+              jp    z,TMERR        ; String? yes - error
+; CONSD: (defined in symbols.sym)
+              call  MOVRF          ; Transfer FAC X to FAC Y
+              call  VALSNG         ; Set type to single
+              ld    a,b            ; Exponent in A
+              or    a              ; Zero?
+              ret   z              ; yes - done
+              call  UNPACK         ; Prepare for rounding
+              ld    hl,0x7920      ; FACLO - 1
+              ld    b,(hl)         ; chopped byte
+              jp    0x0796         ; round
+
+; Convert integer to single precision
+; INEG: (defined in symbols.sym)
+              ld    hl,(FACLO)     ; Load integer from FACLO
+              call  VALSNG         ; Set type to single
+              ld    a,h            ; H in A
+              ld    d,l            ; L in D
+              ld    e,0x00         ; E = 0
+              ld    b,0x90         ; Exponent for 16-bit integer
+              jp    FLOATR         ; Normalize
+
+; Force double precision
+; FRCDBL: (defined in symbols.sym)
+              rst   0x20           ; Test type
+              ret   nc             ; Double precision? yes - done
+              jp    z,TMERR        ; String? yes - error
+              call  m,INEG         ; Integer? yes - convert to single first
+; CONDS: (defined in symbols.sym)
+              ld    hl,START       ; zero
+              ld    (0x791D),hl    ; clear low bytes
+              ld    (0x791F),hl    ; clear low bytes
+; VALDBL: (defined in symbols.sym)
+              ld    a,0x08         ; Type = Double
+              ld    bc,0x043E      ; Skip VALSNG (ld bc, 0x043E)
+              jp    CONISD         ; Store in VALTYP
+
+; Ensure string type
+; CHKSTR: (defined in symbols.sym)
+              rst   0x20           ; Test type
+              ret   z              ; String? yes - done
+
+; TYPE MISMATCH Error
+; TMERR: (defined in symbols.sym)
+              ld    e,0x18         ; Error code
+              jp    ERROR_HANDLER  ; Display error
+
+; Quick integer conversion / Rounding
+; DROUND: (defined in symbols.sym)
+              ld    b,a            ; A in B
+              ld    c,a            ; A in C
+              ld    d,a            ; A in D
+              ld    e,a            ; A in E
+              or    a              ; A = 0?
+              ret   z              ; yes - done
+
+; SINGLE PRECISION MATH ROUTINE - "QINT"
+; This routine is a quick "Greatest Integer" function.
+; The result of INT(FAC X) is left in BC:DE as a signed number.
+; QINT: (defined in symbols.sym)
+              push  hl             ; Save HL
+              call  MOVRF          ; Get SINGLE in FAC X into BC:DE
+              call  UNPACK         ; Unpack FAC X
+              xor   (hl)           ; XOR with MSB of FAC X (sign bit)
+              ld    h,a            ; Save result in H
+              call  m,QINTA        ; If negative, decrement DE (adjust for INT of negative)
+              ld    a,0x98         ; Load A with maximum exponent (0x98)
+              sub   b              ; Subtract exponent of FAC X
+              call  SHIFTR         ; Shift BC:DE right by A times
+              ld    a,h            ; Load A with H (stored sign bit)
+              rla                  ; Shift sign into carry
+              call  c,ROUND        ; If negative, round
+              ld    b,0x00         ; B = 0
+              call  c,NGER         ; If negative, negate
+              pop   hl             ; Restore HL
+              ret                  ; Done
+; QINTA: (defined in symbols.sym)
+              dec   de             ; Decrement DE
+              ld    a,d            ; Check if DE became 0xFFFF
+              and   e              ; AND D with E
+              inc   a              ; Increment A
+              ret   nz             ; If not zero, return
+              dec   bc             ; Decrement BC
+              ret                  ; Done
+
+; SINGLE PRECISION MATH ROUTINE - "FSUB"
+; Subtract the single precision value in (BC:DE) from the single
+; precision value in FAC X. The difference is left in FAC X.
+; FSUB: (defined in symbols.sym)
+              rst   0x20           ; Check current number type
+              ret   m              ; Return if Double Precision
+              call  SIGN           ; Get sign of FAC X
+              jp    p,FNINT        ; If positive, proceed to addition
+              call  NNEG           ; Negate FAC X
+              call  FNINT          ; Call addition
+              jp    VNEG           ; Negate result and return
+
+; LEVEL II BASIC INT() ROUTINE - "FNINT"
+; Returns the integer portion of a floating point number.
+; If the value is positive, the integer portion is returned.
+; If negative with a fractional part, it is rounded up before truncation.
+; FNINT: (defined in symbols.sym)
+              rst   0x20           ; Check current number type
+              ret   m              ; Already integer? Return
+              jr    nc,DINT        ; If double, go to DINT
+              jr    z,TMERR        ; If string, Type Mismatch error
+              call  CONIS          ; Check if fits in integer
+              ld    hl,FAC         ; FAC address
+              ld    a,(hl)         ; Get exponent
+              cp    0x98           ; Test for fractional bits
+              ld    a,(FACLO)      ; FACLO
+              ret   nc             ; Return if no fractional bits
+              ld    a,(hl)         ; Get exponent
+              call  DROUND         ; Convert to integer
+              ld    (hl),0x98      ; Set exponent to 0x98
+              ld    a,e            ; E to A
+              push  af             ; Save AF
+              ld    a,c            ; C to A
+              rla                  ; Rotate
+              call  0x0762         ; Float the integer
+              pop   af             ; Restore AF
+              ret                  ; Done
+
+; DOUBLE PRECISION INT() ROUTINE - "DINT"
+; Double precision INT routine. Works by adding 0.5 and truncating.
+; DINT: (defined in symbols.sym)
+              ld    hl,FAC         ; Address of FAC
+              ld    a,(hl)         ; Get exponent
+              cp    0x90           ; Compare with 0x90
+              jp    c,FRCINT       ; If < 0x90, force integer
+              jr    nz,@L4         ; If zero, done
+              ld    c,a            ; A to C
+              dec   hl             ; HL to FAC MSB
+              ld    a,(hl)         ; Get byte
+              xor   0x80           ; XOR 0x80
+              ld    b,0x06         ; B = 6 (mantissa bytes)
+@L5:
+              dec   hl             ; HL-1
+              or    (hl)           ; OR with (HL)
+              dec   b              ; Decrement B
+              jr    nz,@L5         ; Loop
+              or    a              ; OR A
+              ld    hl,0x8000      ; LD HL, 0x8000
+              jp    z,MAKINT       ; Jump to MAKINT
+              ld    a,c            ; A = C
+@L4:
+              cp    0xB8           ; Compare with 0xB8
+              ret   nc             ; Done if NC
+              push  af             ; Save A
+              call  MOVRF          ; Move FAC X to Y
+              call  UNPACK         ; Unpack FAC X
+              xor   (hl)           ; XOR (HL)
+              dec   hl             ; HL-1
+              ld    (hl),0xB8      ; LD (HL), 0xB8
+              push  af             ; Save AF
+              call  m,DINT_NEG     ; Call m, DINT_NEG
+              ld    hl,FAC_SIGN    ; HL to FAC sign
+              ld    a,0xB8         ; A = 0xB8
+              sub   b              ; Subtract exponent
+              call  DSHFTR         ; Shift right
+              pop   af             ; Restore AF
+              call  m,DROUNA       ; Call m, 0x0D20
+              xor   a              ; XOR A
+              ld    (0x791C),a     ; Store A at 0x791C
+              pop   af             ; Restore AF
+              ret   nc             ; Done if NC
+              jp    DNORML         ; Jump to 0x0CD8
+; DINT_NEG: (defined in symbols.sym)
+              ld    hl,0x791D      ; LD HL, FAC-7
+@L6:
+              ld    a,(hl)         ; Get byte
+              dec   (hl)           ; Decrement (HL)
+              or    a              ; OR A
+              inc   hl             ; HL+1
+              jr    z,@L6          ; Loop if zero
+              ret                  ; Done
+
+; INTEGER MULTIPLY ROUTINE - "UMULT"
+; UMULT: (defined in symbols.sym)
+              push  hl             ; Save HL
+              ld    hl,START       ; HL = 0
+              ld    a,b            ; A = B
+              or    c              ; OR C
+              jr    z,@L7          ; If zero, done
+              ld    a,0x10         ; A = 16 bits
+@L9:
+              add   hl,hl          ; HL = HL * 2
+              jp    c,0x273D       ; Overflow? BS ERROR
+              ex    de,hl          ; EX DE, HL
+              add   hl,hl          ; HL = HL * 2
+              ex    de,hl          ; EX DE, HL
+              jr    nc,@L8         ; If no carry, skip addition
+              add   hl,bc          ; HL = HL + BC
+              jp    c,0x273D       ; Overflow? BS ERROR
+@L8:
+              dec   a              ; Decrement bit counter
+              jr    nz,@L9         ; Loop
+@L7:
+              ex    de,hl          ; Result to DE
+              pop   hl             ; Restore HL
+              ret                  ; Done
+
+; INTEGER SUBTRACTION - "ISUB"
+; ISUB: (defined in symbols.sym)
+              ld    a,h            ; A = H
+              rla                  ; Sign to carry
+              sbc   a,a            ; A = 0x00 or 0xFF
+              ld    b,a            ; B = A
+              call  INEGHL         ; Prepare DE for subtraction
+              ld    a,c            ; A = C
+              sbc   a,b            ; SBC A, B
+              jr    @L10           ; Skip next instruction
+
+; INTEGER ADDITION - "IADD"
+; IADD: (defined in symbols.sym)
+              ld    a,h            ; A = H
+              rla                  ; Sign to carry
+              sbc   a,a            ; A = 0x00 or 0xFF
+@L10:
+              ld    b,a            ; B = A
+              push  hl             ; Save HL
+              ld    a,d            ; A = D
+              rla                  ; Sign to carry
+              sbc   a,a            ; A = 0x00 or 0xFF
+              add   hl,de          ; HL = HL + DE
+              adc   a,b            ; ADC A, B
+              rrca                 ; Rotate
+              xor   h              ; Check for overflow
+              jp    p,0x0A99       ; Jump if no overflow
+
+; INTEGER DIVISION - "IDIV"
+; IDIV: (defined in symbols.sym)
+              push  bc             ; Save BC
+              ex    de,hl          ; EX DE, HL
+              call  0x0ACF         ; Division core
+              pop   af             ; Restore AF
+              pop   hl             ; Restore HL
+              call  PUSHF          ; Check signs
+              ex    de,hl          ; EX DE, HL
+              call  0x0C6B         ; Negate DE if needed
+              jp    0x0F8F         ; Done
+
+; INTEGER DIVISION FOR ARRAYS - "IDIV2"
+; IDIV2: (defined in symbols.sym)
+              ld    a,h            ; A = H
+              or    l              ; OR L
+              jp    z,MAKINT       ; If zero, result 0
+              push  hl             ; Save HL
+              push  de             ; Save DE
+              call  IMULDV         ; Division core
+              push  bc             ; Save BC
+              ld    b,h            ; B = H
+              ld    c,l            ; C = L
+              ld    hl,START       ; HL = 0
+              ld    a,0x10         ; A = 16 bits
+              add   hl,hl          ; HL = HL * 2
+IMULT_OVERFLOW_CHECK:
+              jr    c,$+33         ; on overflow, special routine
+              ex    de,hl          ; 1st factor * 2
+              add   hl,hl
+              ex    de,hl
+IMULT_NEXT:
+              jr    nc,IMULT_LOOP_END ; no, no addition
+              add   hl,bc          ; yes, result + 2nd factor
+              jp    c,0x0C26       ; on overflow, special routine
+IMULT_LOOP_END:
+              dec   a              ; Counter - 1
+              jr    nz,$-13        ; not 0, next pass
+              pop   bc             ; load sign flag
+              pop   de             ; get 1st factor from stack
+              ld    a,h            ; Result > 32767 ?
+              or    a
+              jp    m,IMULT_NEG    ; yes, overflow!
+              pop   de             ; get 2nd factor from stack
+              ld    a,b            ; result with sign flag
+              jp    INEGA          ; correct
+
+; Handle negative integer multiplication result
+; IMULT_NEG: (defined in symbols.sym)
+              xor   0x80           ; Result = 32768 ?
+              or    l
+              jr    z,IMULT_CHECK_SIGN ; yes!
+              ex    de,hl          ; 1st factor in HL
+IMULT_LD_BC_TRICK:
+              DEFB  0x01           ; Dummy instruction
+              pop   bc
+              pop   hl
+              call  0x0ACF         ; 1st factor to single precision in X
+              pop   hl             ; get 2nd factor from stack
+              call  PUSHF          ; 1st factor from X to stack
+              call  0x0ACF         ; 2nd factor to single precision in X
+              pop   bc             ; 1st factor from stack to Y
+              pop   de
+              jp    0x0847         ; X = Y * X
+IMULT_CHECK_SIGN:
+              ld    a,b            ; sign flag in A
+              or    a              ; result should be negative
+              pop   bc             ; clean up stack
+              jp    m,MAKINT       ; is negative, HL (-32768) in X
+              push  de             ; 1st factor on stack
+              call  0x0ACF         ; HL (-32768) to single precision in X
+              pop   de             ; load 1st factor again
+              jp    NNEG           ; complement X, done
+
+; Integer division/multiplication support
+; IMULDV: (defined in symbols.sym)
+              ld    a,h            ; if signs equal,
+              xor   d              ; B(7)=0, if different B(7)=1
+              ld    b,a
+; INEGH: (defined in symbols.sym)
+              call  INEGH2         ; form absolute values
+              ex    de,hl
+INEGH2:
+              ld    a,h            ; sign negative?
+INEGA:
+              or    a              ; Is HL positive?
+              jp    p,MAKINT       ; no, HL in X, done
+
+; Negate HL register pair
+; INEGHL: (defined in symbols.sym)
+              xor   a              ; A = 0
+              ld    c,a            ; C = 0
+              sub   l              ; 0 - L in L
+              ld    l,a
+              ld    a,c            ; A = 0
+              sbc   a,h            ; 0 - H in H
+              ld    h,a
+              jp    MAKINT         ; transfer HL to X
+
+; Integer negation of FACLO
+; INEG_B: (defined in symbols.sym)
+              ld    hl,(FACLO)     ; transfer argument to HL
+              call  INEGHL         ; 0 - argument in HL and X
+              ld    a,h            ; HL = 32768 ?
+              xor   0x80
+              or    l
+              ret   nz             ; no, done!
+INEG_OVERFLOW:
+              ex    de,hl          ; yes, convert HL to single precision
+              call  VALSNG         ; set type = single precision
+              xor   a
+              ld    b,0x98         ; set exponent = 152 (0x98)
+              jp    FLOATR         ; continue at 0969H
+
+; Double Precision Subtraction (FAC = FAC - ARG)
+; DSUB: (defined in symbols.sym)
+              ld    hl,ARG         ; address MSB Y
+              ld    a,(hl)         ; invert sign Y
+              xor   0x80
+              ld    (hl),a
+
+; Double Precision Addition (FAC = FAC + ARG)
+; DADD: (defined in symbols.sym)
+              ld    hl,ARG_EXP     ; address exponent Y
+              ld    a,(hl)         ; Y = 0 ?
+              or    a
+              ret   z              ; yes, X = result
+              ld    b,a            ; exponent Y in B
+              dec   hl             ; address MSB Y
+              ld    c,(hl)         ; sign Y in C
+              ld    de,FAC         ; address exponent X
+              ld    a,(de)
+              or    a              ; X = 0 ?
+              jp    z,VMOVFA       ; yes, Y to X as result
+              sub   b              ; exponent X >= exponent Y ?
+DADD_SWAP:
+              jr    nc,DADD_CHECK_EXP ; yes
+              cpl                  ; no, invert exponent diff.
+              inc   a
+              push  af             ; and save on stack
+              ld    c,0x08         ; byte counter
+              inc   hl             ; address exponent Y
+              push  hl             ; and on stack
+DADD_SWAP_LOOP:
+              ld    a,(de)         ; exchange 1 byte
+              ld    b,(hl)
+              ld    (hl),a
+              ld    a,b
+              ld    (de),a
+              dec   de             ; address pointer - 1
+              dec   hl
+              dec   c              ; done ?
+              jr    nz,DADD_SWAP_LOOP ; no, next byte
+              pop   hl
+              ld    b,(hl)         ; exponent Y in B
+              dec   hl             ; address MSB Y in HL
+              ld    c,(hl)         ; MSB Y in C
+              pop   af             ; load exponent diff.
+DADD_CHECK_EXP:
+              cp    0x39           ; >= mantissa length + 1 ?
+              ret   nc             ; yes, done!
+              push  af             ; exponent diff. on stack
+              call  UNPACK         ; remove sign bits, form sign flag of result
+              inc   hl             ; extra byte for right shift
+              ld    (hl),0x00      ; clear (7926H)
+              ld    b,a            ; sign flag in B
+              pop   af             ; load exponent diff. (shift counter)
+              ld    hl,ARG         ; address MSB Y
+              call  DSHFTR         ; shift Y right
+              ld    a,(0x7926)     ; shifted out byte
+              ld    (0x791C),a     ; transfer to X
+              ld    a,b            ; both signs equal ?
+              or    a
+DADD_POS:
+              jp    p,DADD_ADD     ; if different signs, subtraction
+              call  DADDAA         ; if same signs, addition
+              jp    nc,DROUND_DP   ; no overflow, to end
+              ex    de,hl          ; HL = address exponent X
+              inc   (hl)           ; exponent X + 1, overflow ?
+              jp    z,0x07B2       ; yes, OVERFLOW - error
+              call  DXSHFT         ; shift mantissa 1 bit right
+              jp    DROUND_DP      ; continue at 0D0EH
+
+; Add mantissas
+DADD_ADD:
+              call  DADDAS         ; mantissa subtraction
+              ld    hl,0x7925      ; address sign flag
+              call  c,DNEGR        ; underflow ? yes, complement mantissa X
+
+; Double Precision Normalization
+; DNORML: (defined in symbols.sym)
+              xor   a              ; shift counter = 0
+DNORM_LOOP:
+              ld    b,a
+              ld    a,(FAC_SIGN)   ; load MSB X
+              or    a              ; = 0 ?
+              jr    nz,$+32        ; no !
+DNORM_SHIFT_8:
+              ld    hl,0x791C      ; yes, shift X left by 1 byte
+              ld    c,0x08         ; byte counter
+DNORM_SHIFT_LOOP:
+              ld    d,(hl)         ; load byte
+              ld    (hl),a         ; last byte at this position
+              ld    a,d
+              inc   hl             ; increment address
+              dec   c              ; done ?
+              jr    nz,DNORM_SHIFT_LOOP ; no, continue
+              ld    a,b            ; shift counter - 8
+              sub   0x08
+              cp    0xC0           ; 40 shifts? (X = 0)
+              jr    nz,DNORM_LOOP  ; no, continue
+              jp    FA_ZERO        ; yes, X = 0, done!
+DNORM_BIT_LOOP:
+              dec   b              ; shifts - 1
+              ld    hl,0x791C      ; address LSB X
+              call  DLSHFT         ; shift X left 1 bit
+              or    a              ; highest bit set?
+              jp    p,DNORM_BIT_LOOP ; no, continue
+              ld    a,b            ; number of shifts = 0 ?
+              or    a              ; A = 0 ?
+              jr    z,DROUND_DP    ; yes, to the end
+              ld    hl,FAC         ; address exponent X
+              add   a,(hl)         ; new exponent = old exponent + number of shifts
+              ld    (hl),a         ; back to X
+              jp    nc,FA_ZERO     ; underflow? yes, X=0, done
+              ret   z              ; X = 0? yes, done!
+; DROUND_DP: (defined in symbols.sym)
+              ld    a,(0x791C)     ; highest bit of LSB X = 0?
+              or    a              ; test A
+              call  m,DROUNA       ; no, round X
+              ld    hl,0x7925      ; address sign flag
+              ld    a,(hl)         ; load and sign
+              and   0x80           ; mask out
+              dec   hl             ; address MSB X load
+              dec   hl
+              xor   (hl)           ; invert sign and combine with MSB X
+              ld    (hl),a         ; MSB back to X
+              ret   
+
+; Rounding
+; DROUNA: (defined in symbols.sym)
+              ld    hl,0x791D      ; load address LSB X
+              ld    b,0x07         ; mantissa length = 7 bytes
+@L1:
+              inc   (hl)           ; byte content + 1, overflow?
+              ret   nz             ; no, done
+              inc   hl             ; yes, next byte
+              dec   b              ; all mantissa bytes?
+              jr    nz,@L1         ; no, continue
+              inc   (hl)           ; carry through whole mantissa?
+              jp    z,0x07B2       ; yes, OVERFLOW - Error
+              dec   hl             ; set MSB X = 80H
+              ld    (hl),0x80
+              ret   
+
+; Double Precision Mantissa Addition
+; DADDAA: (defined in symbols.sym)
+              ld    hl,FAC2        ; address LSB Y
+              ld    de,0x791D      ; address LSB X
+              ld    c,0x07         ; counter = 7 bytes
+              xor   a              ; clear carry
+@L2:
+              ld    a,(de)         ; load byte from X
+              adc   a,(hl)         ; add byte from Y
+              ld    (de),a         ; save sum in X
+              inc   de             ; increase address pointers
+              inc   hl
+              dec   c              ; done?
+              jr    nz,@L2         ; no, continue
+              ret   
+
+; Double Precision Mantissa Subtraction
+; DADDAS: (defined in symbols.sym)
+              ld    hl,FAC2        ; address LSB Y
+              ld    de,0x791D      ; address LSB X
+              ld    c,0x07         ; counter as counter
+              xor   a              ; clear carry
+@L3:
+              ld    a,(de)         ; load byte from X
+              sbc   a,(hl)         ; subtract byte from Y
+              ld    (de),a         ; difference in X save
+              inc   de             ; address pointer + 1
+              inc   hl
+              dec   c              ; done?
+              jr    nz,@L3         ; no, continue
+              ret   
+
+; DOUBLE PRECISION MATH ROUTINE - \
+; DNEGR: (defined in symbols.sym)
+              ld    a,(hl)         ; complement sign flag
+              cpl   
+              ld    (hl),a
+              ld    hl,0x791C      ; Address of X LSB
+              ld    b,0x08         ; Byte counter = 8
+              xor   a              ; Clear carry
+@L14:
+              ld    c,a            ; C = 0
+@L4:
+              ld    a,c            ; A = 0
+              sbc   a,(hl)         ; Subtract byte from 0
+              ld    (hl),a         ; and store back
+              inc   hl             ; Address pointer + 1
+              dec   b              ; Done?
+              jr    nz,@L4         ; No, continue
+              ret   
+
+; DOUBLE PRECISION MATH ROUTINE - \
+; DSHFTR: (defined in symbols.sym)
+              ld    (hl),c         ; Store MSB
+              push  hl             ; MSB address on stack
+@L6:
+              sub   0x08           ; More than 8 shifts?
+              jr    c,DSHFR3       ; No!
+              pop   hl             ; Address back from stack
+              push  hl             ; and back on stack
+              ld    de,0x0800      ; Byte counter = 8 (D), Clear temporary storage (E)
+@L5:
+              ld    c,(hl)         ; Load byte into C
+              ld    (hl),e         ; Enter last byte from temporary storage
+              ld    e,c            ; Byte from C into temporary storage
+              dec   hl             ; Address pointer - 1
+              dec   d              ; Byte counter - 1
+              jr    nz,@L5         ; Done? No, back
+              jr    @L6            ; Next byte shift
+; DSHFR3: (defined in symbols.sym)
+              add   a,0x09         ; Bit shifts + 1
+              ld    d,a            ; in D
+; DSHFR4: (defined in symbols.sym)
+              xor   a              ; Clear carry
+              pop   hl             ; Load address pointer from stack
+              dec   d              ; Another shift?
+              ret   z              ; No, done
+@L8:
+              push  hl             ; Save address pointer
+              ld    e,0x08         ; Byte counter = 8
+@L7:
+              ld    a,(hl)         ; Load byte
+              rra                  ; Shift 1 bit right
+              ld    (hl),a         ; and back to memory
+              dec   hl             ; Address pointer - 1
+              dec   e              ; Byte counter - 1
+              jr    nz,@L7         ; Done? No, back
+              jr    DSHFR4         ; Next bit shift
+
+; Shift X Register Right by 1 Bit
+; DXSHFT: (defined in symbols.sym)
+              ld    hl,FAC_SIGN    ; Address MSB of X
+              ld    d,0x01         ; Bit counter = 1
+              jr    @L8            ; Continue at 0D84H
+
+; Shift Memory Area Left by 1 Bit
+; DLSHFT: (defined in symbols.sym)
+              ld    c,0x08         ; Byte counter = 8
+@L9:
+              ld    a,(hl)         ; Load byte
+              rla                  ; Shift left
+              ld    (hl),a         ; and back to memory
+              inc   hl             ; Address pointer + 1
+              dec   c              ; Byte counter - 1
+              jr    nz,@L9         ; Done? No, back
+              ret   
+
+; LEVEL II BASIC DOUBLE PRECISION MULTIPLICATION - \
+; DMULT: (defined in symbols.sym)
+              call  SIGN           ; 1st factor = 0?
+              ret   z              ; Yes, done
+              call  0x090A         ; Process exponent and sign
+              call  DMULDV         ; Transfer mantissa of 1st factor from X to 414A-4150. Clear X.
+              ld    (hl),c         ; Clear LSB of X
+              inc   de             ; Address LSB of 1st factor
+              ld    b,0x07         ; Byte counter = 7
+@L12:
+              ld    a,(de)         ; Load byte from 1st factor
+              inc   de             ; Address pointer 1st factor + 1
+              or    a              ; Is it 0?
+              push  de             ; Address pointer on stack
+              jr    z,@L10         ; Byte is 0!
+              ld    c,0x08         ; Not 0, bit counter = 8
+@L11:
+              push  bc             ; Save bit counter
+              rra                  ; Next bit set?
+              ld    b,a            ; Transfer byte to B
+              call  c,DADDAA       ; Yes, add 2nd factor to X
+              call  DXSHFT         ; Rotate X one bit right
+              ld    a,b            ; Transfer byte from B back to A
+              pop   bc             ; Reload bit counter
+              dec   c              ; Byte finished processing?
+              jr    nz,@L11        ; No, next bit
+@L13:
+              pop   de             ; Reload address pointer
+              dec   b              ; All 7 bytes processed?
+              jr    nz,@L12        ; No, next byte
+              jp    DNORML         ; To normalization
+@L10:
+              ld    hl,FAC_SIGN    ; Shift result right by 1 byte
+              call  0x0D70
+              jr    @L13           ; Next byte
+              nop   
+              nop   
+              nop   
+              nop   
+              nop   
+              nop   
+              jr    nz,@L14
+
+; Division by 10 with Double Precision
+; DDIV10: (defined in symbols.sym)
+              ld    de,0x0DD4      ; Load address of constant 10
+              ld    hl,FAC2        ; Load address of Y
+              call  VMOVE          ; Constant 10 in Y
+
+; LEVEL II BASIC DOUBLE PRECISION DIVISION - \
+; DDIV: (defined in symbols.sym)
+              ld    a,(ARG_EXP)    ; Divisor = 0?
+              or    a
+              jp    z,DIV_ZERO_ERR_HANDLER ; Yes, DIVISION BY ZERO error
+              call  MULDVS         ; Process sign and exponent
+              inc   (hl)           ; Exponent correction (+2)
+              inc   (hl)           ; (0907 results in Exp X - Exp Y - 1)
+              call  DMULDV         ; Dividend in area 414A-4150. Clear X for result
+              ld    hl,0x7951      ; Highest byte of dividend = 0
+              ld    (hl),c
+              ld    b,c            ; Clear flag
+@L16:
+              ld    de,0x794A      ; Address dividend
+              ld    hl,FAC2        ; Address divisor
+              call  0x0D4B         ; Dividend - divisor in dividend
+              ld    a,(de)         ; Load MSB of dividend
+              sbc   a,c            ; - Carry (C=0)
+              ccf                  ; Invert carry, underflow?
+              jr    c,@L15         ; No, shift 1 into result
+              ld    de,0x794A      ; Yes, undo subtraction
+              ld    hl,FAC2        ; DE=Dividend, HL=Divisor
+              call  0x0D39         ; Dividend + divisor in dividend
+              xor   a              ; Clear carry
+              DEFB  0xDA           ; Dummy instruction (JP C, 0x0412)
+@L15:
+              ld    (de),a
+              inc   b
+              ld    a,(FAC_SIGN)   ; Load MSB of result
+              inc   a              ; Bit 7 set?
+              dec   a
+              rra                  ; Found bit in A(7) for rounding
+              jp    m,0x0D11       ; Done, to rounding
+              rla                  ; Shift bit back into carry
+              ld    hl,0x791D      ; Address LSB of result (X)
+              ld    c,0x07         ; Byte counter = 7
+              call  0x0D99         ; Rotate result left, shift in bit.
+              ld    hl,0x794A      ; Address of dividend
+              call  DLSHFT         ; Rotate dividend 1 bit left
+              ld    a,b            ; Flag set?
+              or    a
+              jr    nz,@L16        ; Yes, continue
+              ld    hl,FAC         ; No, exponent of result - 1
+              dec   (hl)           ; Underflow?
+              jr    nz,@L16        ; No, continue
+              jp    0x07B2         ; Yes, OVERFLOW error
+
+; Subroutine for Double Precision Multiplication and Division
+; DMULDV: (defined in symbols.sym)
+              ld    a,c            ; MSB of Y in memory
+              ld    (ARG),a
+              dec   hl             ; Load MSB of X address
+              ld    de,0x7950      ; Pointer to auxiliary register
+              ld    bc,0x0700      ; Transfer X to auxiliary register. Clear X, byte counter = 7
+@L17:
+              ld    a,(hl)         ; Load byte from X
+              ld    (de),a         ; in auxiliary register
+              ld    (hl),c         ; Clear byte in X
+              dec   de             ; Address pointer - 1
+              dec   hl
+              dec   b              ; Byte counter - 1
+              jr    nz,@L17        ; Done? No, back
+              ret   
+
+; Double Precision Multiplication by 10
+; DMUL10: (defined in symbols.sym)
+              call  VMOVAF         ; Transfer X to Y
+              ex    de,hl          ; Load address of exponent X
+              dec   hl
+              ld    a,(hl)         ; Factor in X = 0?
+              or    a
+              ret   z              ; Yes, result = 0
+              add   a,0x02         ; Exponent X + 2 (Factor * 4)
+              jp    c,0x07B2       ; Overflow? Yes, OVERFLOW error
+              ld    (hl),a         ; Store exponent back
+              push  hl             ; Address of exponent X on stack
+              call  DADD           ; X + Y to X (X = Factor * 5)
+              pop   hl             ; Address of exponent X from stack
+              inc   (hl)           ; Exponent X + 1 (X = Factor * 10)
+              ret   nz             ; Overflow? No, done
+              jp    0x07B2         ; Yes, OVERFLOW error
+
+; Convert string to double precision number
+; STR_TO_DOUBLE: (defined in symbols.sym)
+              call  FA_ZERO        ; X = 0
+              call  VALDBL         ; Type = double precision
+              DEFB  0xF6           ; Zero-Flag = 0
+
+; Convert string to number of appropriate type
+; STR_TO_NUM: (defined in symbols.sym)
+              xor   a              ; Zero-Flag = 1 (Byte also in instruction E68)
+              ex    de,hl          ; Address pointer in DE
+              ld    bc,0x00FF      ; Decimal places = 0, '.'-Flag = FF
+              ld    h,b            ; HL = 0
+              ld    l,b
+              call  z,MAKINT       ; Jump if 0E6C? yes, type=integer
+              ex    de,hl          ; Address pointer back in HL
+              ld    a,(hl)         ; Load character
+              cp    0x2D           ; '-'? yes -> Z-Flag = 1
+              push  af             ; Flag on stack
+              jp    z,FINC         ; yes, next character
+              cp    0x2B           ; '+' ?
+              jr    z,FINC         ; yes, next character
+              dec   hl             ; no sign, address pointer - 1
+; FINC: (defined in symbols.sym)
+              rst   0x10           ; followed by a digit?
+              jp    c,FINDIG       ; yes!
+              cp    0x2E           ; '.'
+              jp    z,STR_TO_NUM_DP ; yes!
+              cp    0x45           ; 'E'? (Exponent for single precision)
+              jr    z,@L18         ; yes!
+              cp    0x25           ; '%'? (Treat number as integer)
+              jp    z,FININT       ; yes!
+              cp    0x23           ; '#'? (Treat number as double precision)
+              jp    z,FINDBF       ; yes!
+              cp    0x21           ; '!'? (Treat number as single precision)
+              jp    z,FINSNF       ; yes!
+              cp    0x44           ; 'D'? (Exponent for double precision)
+              jr    nz,@L19        ; no!
+
+; Determine exponent
+; FINEX: (defined in symbols.sym)
+              or    a              ; Set flag for type adjustment
+@L18:
+              call  FINFRC         ; X to single or double precision
+              push  hl             ; Save address pointer
+              ld    hl,FINEC       ; Load return address
+              ex    (sp),hl        ; Exchange on stack with address pointer
+              rst   0x10           ; Next character
+              dec   d              ; Exp.-Sign-Flag to '-'
+              cp    0xCE           ; '-' (Token)
+              ret   z              ; yes!
+              cp    0x2D           ; '-'
+              ret   z              ; yes!
+              inc   d              ; Exp.-Sign-Flag to '+'
+              cp    0xCD           ; '+' (Token)
+              ret   z              ; yes!
+              cp    0x2B           ; '+'
+              ret   z              ; yes!
+              dec   hl             ; no sign, address pointer back
+              pop   af             ; Remove return address from stack
+; FINEC: (defined in symbols.sym)
+              rst   0x10           ; Next character
+              jp    c,FINEDG       ; Digit? yes-continue at 0F94H
+              inc   d              ; no, Exp.-Sign-Flag = '-' ?
+              jr    nz,@L19        ; no!
+              xor   a              ; yes, invert exponent
+              sub   e              ; and back into E
+              ld    e,a
+@L19:
+              push  hl             ; Save address pointer
+              ld    a,e            ; Exponent - decimal places
+              sub   b              ; Difference > 0 ?
+@L20:
+              call  p,FINMUL       ; yes, Number * 10, Difference - 1
+              call  m,FINDIV       ; no, Number / 10, Difference + 1
+              jr    nz,@L20        ; repeat until difference = 0
+              pop   hl             ; Load address pointer
+              pop   af             ; Sign flag back on stack
+              push  hl             ; Address pointer back on stack
+              call  z,VNEG         ; Sign-Flag='-'? yes, X = -X
+              pop   hl             ; Address pointer back
+              rst   0x20           ; Test type
+              ret   pe             ; Double precision? yes-done
+              push  hl             ; Address pointer back on stack
+              ld    hl,0x0890      ; Return address on stack
+              push  hl
+              call  INT            ; Single precision, if possible, convert to integer
+              ret                  ; continue at 0890H
+
+; Process decimal point
+; STR_TO_NUM_DP: (defined in symbols.sym)
+              rst   0x20           ; Test type
+              inc   c              ; '.'-Flag = 0? (was there already a '.')
+              jr    nz,@L19        ; yes, done
+              call  c,FINFRC       ; Single precision! convert integer to single precision
+              jp    FINC           ; next character
+
+; '%' found
+; FININT: (defined in symbols.sym)
+              rst   0x20           ; Test type
+              jp    p,SYNTAX_ERR_HANDLER ; not integer, SYNTAX - Error
+@L21:
+              inc   hl             ; address pointer + 1
+              jr    @L19           ; done!
+
+; '#' found
+; FINDBF: (defined in symbols.sym)
+              or    a              ; Set flag for type adjustment
+; FINSNF: (defined in symbols.sym)
+              call  FINFRC         ; X to single or double precision
+              jr    @L21           ; continue at 0EF2H
+
+; Convert number to single or double precision
+; FINFRC: (defined in symbols.sym)
+              push  hl             ; Save registers on stack
+              push  de
+              push  bc
+              push  af             ; Save flag
+              call  z,FRCSNG       ; Z-flag=1, convert to single precision
+              pop   af             ; Reload flag
+              call  nz,FRCDBL      ; Z-flag=0, convert to double precision
+              pop   bc             ; Restore register contents
+              pop   de
+              pop   hl
+              ret   
+
+; Multiply real number by 10
+; FINMUL: (defined in symbols.sym)
+              ret   z              ; Z-Flag = 1?, return
+              push  af             ; A on stack
+              rst   0x20           ; Test type
+              push  af             ; Remember type-flag
+              call  po,MUL10       ; type=single prec? => * 10
+              pop   af             ; Reload type-flag
+              call  pe,DMUL10      ; type=double prec? => * 10
+              pop   af             ; Restore A-reg
+              dec   a              ; A - 1
+              ret   
+
+; Divide real number by 10
+; FINDIV: (defined in symbols.sym)
+              push  de             ; Save register
+              push  hl
+              push  af
+              rst   0x20           ; Test type
+              push  af             ; Save type-flag
+              call  po,FDIV        ; type=single prec? => / 10
+              pop   af             ; Reload type-flag
+              call  pe,DDIV10      ; type=double prec? => / 10
+              pop   af             ; Restore register contents
+              pop   hl
+              pop   de
+              inc   a              ; A + 1
+              ret   
+
+; Process digit
+; FINDIG: (defined in symbols.sym)
+              push  de             ; Save Exp.-Sign-Flag and Exponent
+              ld    a,b            ; Next character. + 1, if '.'-Flag 0
+              adc   a,c
+              ld    b,a            ; in B
+              push  bc             ; Save decimal places and flag
+              push  hl             ; Save address pointer
+              ld    a,(hl)         ; Load digit
+              sub   0x30           ; Remove zone part
+              push  af             ; Adjusted digit on stack
+              rst   0x20           ; Test type
+              jp    p,FINDGV       ; single or double precision!
+
+; Integer
+              ld    hl,(FACLO)     ; Load value from X
+              ld    de,0x0CCD      ; > = 3277 ? (i.e. 10 * X >= 32770)
+              rst   0x18           ; Compare with HL
+              jr    nc,FINDG2      ; yes, convert to single precision
+              ld    d,h            ; Multiply number by 10
+              ld    e,l
+              add   hl,hl          ; * 2
+              add   hl,hl          ; * 4
+              add   hl,de          ; * 5
+              add   hl,hl          ; * 10
+              pop   af             ; Reload digit
+              ld    c,a            ; in BC (B = 0)
+              add   hl,bc          ; and add to number
+              ld    a,h            ; new number > 32767 ?
+              or    a              ; Test A
+              jp    m,FINDG1       ; yes, convert to single precision
+              ld    (FACLO),hl     ; new number back in X
+@L22:
+              pop   hl             ; Reload address pointer
+              pop   bc             ; Reload decimal places + flag
+              pop   de             ; Restore Exp.-Sign-Flag + Exponent
+              jp    FINC           ; next character
+; FINDG1: (defined in symbols.sym)
+              ld    a,c            ; Save digit
+              push  af             ; A on stack
+; FINDG2: (defined in symbols.sym)
+              call  INEG           ; convert HL to single precision
+              scf                  ; ignore in jump instruction
+; FINDGV: (defined in symbols.sym)
+              jr    nc,FINDGD      ; double precision? yes-jump!
+
+; Single precision number
+              ld    bc,0x9474      ; Constant 1E6 in Y
+              ld    de,0x2400
+              call  FCOMP          ; Value >= 1E6 ?
+              jp    p,FINDG3       ; yes, convert to double precision
+              call  MUL10          ; Value * 10
+              pop   af             ; Reload digit
+              call  FADD8          ; and add to number
+              jr    @L22           ; back
+
+; Double precision number
+; FINDG3: (defined in symbols.sym)
+              call  CONDS          ; convert to double precision
+; FINDGD: (defined in symbols.sym)
+              call  DMUL10         ; Value * 10
+              call  VMOVAF         ; Transfer number to Y
+              pop   af             ; Reload digit
+              call  FLOAT          ; Transfer to X
+              call  CONDS          ; convert to double precision
+              call  DADD           ; and add to number
+              jr    @L22           ; back
+
+; Add 8 Bit Integer to single precision number
+; FADD8: (defined in symbols.sym)
+              call  PUSHF          ; Save 1st addend on stack
+              call  FLOAT          ; 2. Addend with single precision in X
+              pop   bc             ; 1. Addend from stack in Y
+              pop   de
+              jp    FP_ADD_X_PLUS_Y ; form sum
+
+; Process exponent digit
+; FINEDG: (defined in symbols.sym)
+              ld    a,e            ; Exponent > 9 ?
+              cp    0x0A
+              jr    nc,@L23        ; yes, generate overflow
+              rlca                 ; Exponent * 10
+              rlca  
+              add   a,e
+              rlca  
+              add   a,(hl)         ; Add digit
+              sub   0x30           ; Eliminate zone part
+              ld    e,a            ; new exponent
+              DEFB  0xFA           ; Dummy, will never be executed
+@L23:
+              ld    e,0x32
+              jp    FINEC          ; process next digit
+
+; To complete an error message
+; output ' IN line number'
+; INPRT: (defined in symbols.sym)
+              push  hl             ; line number on stack
+              ld    hl,MSG_IN_TEXT ; Load text address 'IN '
+              call  OUTSTR         ; output text
+              pop   hl             ; reload line number
+
+; Output line number
+; LINPRT: (defined in symbols.sym)
+              call  MAKINT         ; line number as integer in X
+              xor   a              ; clear format-flag
+              call  FOUINI         ; initialize buffer
+              or    (hl)           ; X as integer without sign
+              call  0x0FD9         ; convert to string
+              jp    STROUT         ; output string
+; PUSTR_UNFORM_INIT: (defined in symbols.sym)
+              xor   a
+
+; Convert number to formatted string
+; PUFOUT: (defined in symbols.sym)
+              call  FOUINI         ; address buffer start (7930H)
+              and   0x08           ; output '+'?
+              jr    z,@L24         ; no!
+              ld    (hl),0x2B      ; '+' in buffer
+@L24:
+              ex    de,hl          ; buffer pointer in DE
+              call  VSIGN          ; Number >= 0?
+              ex    de,hl          ; buffer pointer back in HL
+              jp    p,0x0FD9       ; yes!
+              ld    (hl),0x2D      ; '-' in buffer
+              push  bc             ; length parameter on stack
+              push  hl             ; buffer pointer on stack
+              call  VNEG           ; save signs
+              pop   hl             ; reload buffer pointer
+              pop   bc             ; reload length parameter
+              or    h              ; reset null-flag
+              inc   hl             ; buffer pointer behind sign
+              ld    (hl),0x30      ; '0' in buffer
+              ld    a,(FMT_FLAG)   ; Format-Flag in D
+              ld    d,a
+              rla                  ; execute formatting?
+              ld    a,(VALTYP)     ; load type
+              jp    c,PUSTR_FORM   ; yes!
+              jp    z,0x1092       ; Value = 0, done
+              cp    0x04           ; single or double precision?
+              jp    nc,FOUFRV      ; yes!
+
+; Convert integer to string
+; INT_TO_STR: (defined in symbols.sym)
+              ld    bc,START       ; delete parameter for '.' and ','
+              call  INT_TO_ASCII   ; generate string
+
+; Process format-flag bits 2-5
+; PUSTR_BITS_2_5: (defined in symbols.sym)
+              ld    hl,FBUFFR      ; buffer pointer on start
+              ld    b,(hl)         ; load character
+              ld    c,0x20         ; fill leading blanks
+              ld    a,(FMT_FLAG)   ; load format-flag
+              ld    e,a            ; in E
+              and   0x20           ; fill with '*'? (Bit 5)
+              jr    z,@L25         ; no!
+              ld    a,b            ; sign = filler?
+              cp    c
+              ld    c,0x2A         ; filler = '*'
+              jr    nz,@L25        ; no!
+              ld    b,c            ; sign = filler
+@L25:
+              ld    (hl),c         ; filler in buffer
+              rst   0x10           ; next character = line end?
+              jr    z,@L26         ; yes, do not fill further
+              cp    0x45           ; Exp. indicator for single precision?
+              jr    z,@L26         ; yes, do not fill further
+              cp    0x44           ; Exp. indicator for double precision?
+              jr    z,@L26         ; yes, do not fill further
+              cp    0x30           ; '0'?
+              jr    z,@L25         ; yes, continue filling
+              cp    0x2C           ; ','?
+              jr    z,@L25         ; yes, continue filling
+              cp    0x2E           ; '.'
+              jr    nz,@L27        ; no, do not fill further
+@L26:
+              dec   hl             ; insert a '0' before '.', 'E' or 'D'
+              ld    (hl),0x30
+@L27:
+              ld    a,e            ; dollar sign before number?
+              and   0x10           ; (Bit 4 of format-flag)
+              jr    z,@L28         ; no!
+              dec   hl             ; buffer pointer - 1
+              ld    (hl),0x24      ; '$' in buffer
+@L28:
+              ld    a,e            ; sign behind number?
+              and   0x04           ; (Bit 2 of format-flag)
+              ret   nz             ; yes, return
+              dec   hl             ; buffer pointer before number
+              ld    (hl),b         ; sign before number
+              ret   
+; FOUINI: (defined in symbols.sym)
+              ld    (FMT_FLAG),a   ; Save format flag
+              ld    hl,FBUFFR      ; Address start of buffer
+              ld    (hl),0x20      ; Space at start of buffer
+              ret                  ; Return
+
+; Convert single or double precision unformatted into string
+; FOUFRV: (defined in symbols.sym)
+              cp    0x05           ; Determine number of places
+              push  hl             ; Buffer pointer on stack
+              sbc   a,0x00         ; Type - Carry in A
+              rla                  ; * 2 = number of places
+              ld    d,a            ; Number of places in D
+              inc   d              ; + 1
+              call  GET_10_EXP     ; Determine power of 10 exponent
+              ld    bc,0x0300      ; Set parameters for '.' and ','
+              add   a,d            ; Exponent + 2 >= 0?
+              jp    m,0x1057       ; no, exponent in buffer
+              inc   d              ; Number of places + 2 in D
+              cp    d              ; Exponent < number of places?
+              jr    nc,@L29        ; no, exponent in buffer
+              inc   a              ; yes, exponent + 3 = decimal point
+              ld    b,a            ; B = exponent + 3
+              ld    a,0x02         ; no exponent is output
+@L29:
+              sub   0x02           ; Exponent - 2 in A
+              pop   hl             ; Reload buffer pointer
+              push  af             ; Exponent on stack
+              call  SET_DOT_COMMA  ; Set '.' and ','
+              ld    (hl),0x30      ; '0' in buffer
+              call  z,INXHRT       ; '.' set? yes, buffer pointer + 1
+              call  FAC_TO_STR     ; Convert mantissa to string
+@L30:
+              dec   hl             ; Buffer pointer - 1
+              ld    a,(hl)         ; Load character
+              cp    0x30           ; = '0'?
+              jr    z,@L30         ; yes, continue
+              cp    0x2E           ; '.' before the last zero?
+              call  nz,INXHRT      ; no! buffer pointer + 1
+              pop   af             ; Load exponent. = 0?
+              jr    z,FOUFRV_END   ; yes, no exponent in buffer
+              push  af             ; Exponent back on stack
+              rst   0x20           ; Test type, Carry=1 for single precision
+              ld    a,0x22         ; Load 'D' / 2
+              adc   a,a            ; Exp. identifier = 'D' or 'E'
+              ld    (hl),a         ; Enter in buffer
+              inc   hl             ; Buffer pointer + 1
+              pop   af             ; Load exponent. < 0?
+              ld    (hl),0x2B      ; '+' in buffer
+              jp    p,FOUFRV_POS   ; Exponent > 0!
+              ld    (hl),0x2D      ; '-' in buffer
+              cpl                  ; Remove sign
+              inc   a              ; Increment A
+; FOUFRV_POS: (defined in symbols.sym)
+              ld    b,0x2F         ; Digit = '0' - 1
+@L31:
+              inc   b              ; Digit + 1 (yields 1st digit)
+              sub   0x0A           ; Exponent - 10 = underflow?
+              jr    nc,@L31        ; no, continue
+              add   a,0x3A         ; yes, undo last subtraction. + '0' yields 2nd digit
+              inc   hl             ; Buffer pointer + 1
+              ld    (hl),b         ; 1st digit in buffer
+              inc   hl             ; Buffer pointer + 1 in buffer
+              ld    (hl),a         ; 2nd digit in buffer
+              inc   hl             ; Buffer pointer + 1
+; FOUFRV_END: (defined in symbols.sym)
+              ld    (hl),0x00      ; End marker in buffer
+              ex    de,hl          ; Buffer end address in DE
+              ld    hl,FBUFFR      ; Buffer start address in HL
+              ret                  ; done !!!
+
+; Generate formatted string
+; PUSTR_FORM: (defined in symbols.sym)
+              inc   hl             ; Buffer pointer + 1
+              push  bc             ; Length parameters on stack
+              cp    0x04           ; Single or double precision?
+              ld    a,d            ; Format flag in A
+              jp    nc,PUSTR_VAL   ; yes!
+
+; Convert integer to string
+; PUSTR_INT: (defined in symbols.sym)
+              rra                  ; Exponent output? (Bit 0)
+              jp    c,PUSTR_EXP_INT ; yes!
+              ld    bc,0x0603      ; Parameters for '.' and ','
+              call  0x1289         ; no ',' output?
+              pop   de             ; Load length parameter into DE
+              ld    a,d            ; Pre-decimal places - 5 >= 0?
+              sub   0x05
+              call  p,WRITE_ZEROS  ; output corresponding number of zeros
+              call  INT_TO_ASCII   ; Convert number to string
+              ld    a,e            ; no post-decimal places?
+              or    a              ; OR A
+              call  z,DCXHRT       ; yes, delete '.' in buffer
+              dec   a              ; Post-decimal places - 1 > 0?
+              call  p,WRITE_ZEROS  ; output corresponding number of zeros
+              push  hl             ; Buffer pointer on stack
+
+; Remaining formatting. Establish correct field length
+; PUSTR_REST: (defined in symbols.sym)
+              call  PUSTR_BITS_2_5 ; Process remaining format specifications
+              pop   hl             ; Reload buffer pointer
+              jr    z,@L32         ; Sign behind number?
+              ld    (hl),b         ; Set sign behind number
+              inc   hl             ; Buffer pointer + 1
+@L32:
+              ld    (hl),0x00      ; Mark end of line with X'00'
+              ld    hl,0x792F      ; Load address before buffer
+; PUSTR_LOOP_CONT: (defined in symbols.sym)
+              inc   hl             ; Buffer address + 1
+; PUSTR_LOOP: (defined in symbols.sym)
+              ld    a,(SAVP)       ; LSB '.'-position
+              sub   l              ; SUB L
+              sub   d              ; - pre-decimal places = 0?
+              ret   z              ; yes, done
+              ld    a,(hl)         ; Load character
+              cp    0x20           ; = ' '?
+              jr    z,PUSTR_LOOP_CONT ; yes, continue
+              cp    0x2A           ; = '*'?
+              jr    z,PUSTR_LOOP_CONT ; yes, continue
+              dec   hl             ; Buffer pointer - 1
+              push  hl             ; and onto stack
+; PUSTR_STACK_CHAR: (defined in symbols.sym)
+              push  af             ; Character + flag on stack
+              ld    bc,PUSTR_STACK_CHAR ; Set return address
+              push  bc             ; PUSH BC
+              rst   0x10           ; next character
+              cp    0x2D           ; = '-'?
+              ret   z              ; yes, continue
+              cp    0x2B           ; = '+'?
+              ret   z              ; yes, continue
+              cp    0x24           ; = '$'?
+              ret   z              ; yes, continue
+              pop   bc             ; Remove return address again
+              cp    0x30           ; = '0'?
+              jr    nz,PUSTR_OVERFLOW ; no, field overflow
+              inc   hl             ; Buffer pointer + 1 (behind '.')
+              rst   0x10           ; next character. = digit?
+              jr    nc,PUSTR_OVERFLOW ; no, field overflow
+              dec   hl             ; Buffer pointer to '.'
+              DEFB  0x01           ; LD BC,772B Dummy instruction
+; PUSTR_LOOP_NEXT: (defined in symbols.sym)
+              dec   hl
+              ld    (hl),a
+              pop   af             ; Get character from stack
+              jr    z,PUSTR_LOOP_NEXT ; last character? no-to 10F9H
+              pop   bc             ; Get buffer pointer from stack
+              jp    PUSTR_LOOP     ; continue at 10CEH
+
+; Field overflow
+; PUSTR_OVERFLOW: (defined in symbols.sym)
+              pop   af             ; Get character from stack
+              jr    z,PUSTR_OVERFLOW ; last character?
+              pop   hl             ; Reload buffer pointer
+              ld    (hl),0x25      ; '%' for field overflow before number
+              ret                  ; Return
+
+; Generate formatted string of single or double precision numbers
+; PUSTR_VAL: (defined in symbols.sym)
+              push  hl             ; Buffer pointer on stack
+              rra                  ; Exponent output?
+              jp    c,PUSTR_EXP_FLOAT ; yes!
+              jr    z,PUSTR_SINGLE ; for single precision => jump
+              ld    de,FFXDXM      ; Address constant 1D16
+              call  0x0A49         ; Value >= 1D16?
+              ld    d,0x10         ; Precision (16 places) in D
+              jp    m,0x1132       ; Value < 1D16!
+
+; Field overflow
+; PUSTR_OVERFLOW_STR: (defined in symbols.sym)
+              pop   hl             ; Reload buffer pointer
+              pop   bc             ; Load length parameter
+              call  PUSTR_UNFORM_INIT ; Generate unformatted string
+              dec   hl             ; Buffer pointer - 1
+              ld    (hl),0x25      ; '%' for field overflow before string
+              ret                  ; Return
+
+; Single precision number
+; PUSTR_SINGLE: (defined in symbols.sym)
+              ld    bc,0xB60E      ; Set Y = 1E6
+              ld    de,0x1BCA
+              call  FCOMP          ; Value >= 1E6?
+              jp    p,PUSTR_OVERFLOW_STR ; Yes, field overflow
+              ld    d,0x06         ; Precision (6 digits) in D
+              call  SIGN           ; Value = 0?
+              call  nz,GET_10_EXP  ; No, Exp - Precision + 1 in A
+              pop   hl             ; Load buffer pointer
+              pop   bc             ; Load length parameter
+              jp    m,PUSTR_HAS_DECIMAL ; Decimal places? Yes - jump
+
+; No decimal places
+; PUSTR_NO_DECIMAL: (defined in symbols.sym)
+              push  bc             ; Length parameter on stack
+              ld    e,a            ; Exp - Precision + 1 in E
+              ld    a,b            ; Integer field length in A
+              sub   d              ; - Exponent
+              sub   e              ; - 1 >= 0?
+              call  p,WRITE_ZEROS  ; Yes, corresponding number of zeros in buffer
+              call  GET_FMT_PARAMS ; Determine parameters for '.' and ','
+              call  FAC_TO_STR     ; Generate string
+              or    e              ; Exponent - Precision + 1 > 0?
+              call  nz,0x1277      ; Yes, corresponding number of zeros in buffer with '.' and ','
+              or    e              ; Exponent - Precision + 1 > 0?
+              call  nz,SET_DOT_COMMA ; Yes, '.' and ',' in buffer
+              pop   de             ; Load length parameter
+              jp    0x10B6         ; Execute remaining formatting
+
+; Decimal places present
+; PUSTR_HAS_DECIMAL: (defined in symbols.sym)
+              ld    e,a            ; Exponent - Precision + 1 to E
+              ld    a,c            ; Fractional field length in A
+              or    a              ; > 0?
+              call  nz,0x0F16      ; Yes, - 1 for '.'
+              add   a,e            ; More than present?
+              jp    m,0x1162       ; Yes!
+              xor   a              ; No, number of superfluous places = 0
+              push  bc             ; Length parameter on stack
+              push  af             ; -Number of superfluous places on stack
+              call  m,FINDIV       ; Remove superfluous places
+              jp    m,0x1164       ; Done? No - back
+              pop   bc             ; -Number of superfluous places from stack
+              ld    a,e            ; -Number of fractional places to be actually output in A
+              sub   b              ; Fractional places in A
+              pop   bc             ; Reload length parameter
+              ld    e,a            ; Fractional places in E
+              add   a,d            ; + Precision > 0?
+              ld    a,b            ; Integer field length in A
+              jp    m,PUSTR_ONLY_DECIMAL ; Yes!
+              sub   d              ; Integer field length - Precision
+              sub   e              ; + Fractional places to be output > 0?
+              call  p,WRITE_ZEROS  ; Corresponding number of zeros in buffer
+              push  bc             ; Length parameter on stack
+              call  GET_FMT_PARAMS ; Determine parameters for '.' and ','
+              jr    @L33           ; Continue at 1190H
+
+; Only fractional places
+; PUSTR_ONLY_DECIMAL: (defined in symbols.sym)
+              call  WRITE_ZEROS    ; Zeros for integer places in buffer
+              ld    a,c            ; Fractional field length in A
+              call  0x1294         ; '.' in buffer
+              ld    c,a            ; Fractional field length in C
+              xor   a              ; Actually output fractional places
+              sub   d              ; - Precision
+              sub   e              ; = Number of zeros to be inserted
+              call  WRITE_ZEROS    ; Enter zeros into buffer
+              push  bc             ; Save length parameter on stack
+              ld    b,a            ; Clear parameters for '.' and ','
+              ld    c,a
+@L33:
+              call  FAC_TO_STR     ; String into buffer
+              pop   bc             ; Load length parameter from stack
+              or    c              ; Fractional field length > 0?
+              jr    nz,@L34        ; Yes!
+              ld    hl,(SAVP)      ; Load '.' address
+@L34:
+              add   a,e            ; Fractional field length - number of actually output fractional 
+              dec   a              ; - 1 for '.'
+              call  p,WRITE_ZEROS  ; > 0? Output corresponding number of zeros
+              ld    d,b            ; Integer field length in D
+              jp    0x10BF         ; Continue at 10BFH
+
+; Formatted exponent output
+; PUSTR_EXP_INT: (defined in symbols.sym)
+              push  hl             ; Buffer pointer on stack
+              push  de             ; Format flag on stack
+              call  INEG           ; Convert integer to single precision
+              pop   de             ; Reload format flag
+              xor   a              ; Set flag for single precision
+
+; Entry for single and double precision
+; PUSTR_EXP_FLOAT: (defined in symbols.sym)
+              jp    z,0x11B0       ; Single precision? => jump
+              ld    e,0x10         ; Double precision = 16 places
+              DEFB  0x01           ; LD BC trick
+              ld    e,0x06         ; Single precision = 6 places
+              call  SIGN           ; Value = 0?
+              scf                  ; Yes, set Carry
+              call  nz,GET_10_EXP  ; No, Exponent - Precision + 1, C=0
+              pop   hl             ; Load buffer pointer
+              pop   bc             ; Load length parameter
+              push  af             ; Save Exp-Precision+1 and flag
+              ld    a,c            ; Fractional field length = 0?
+              or    a
+              push  af             ; Fractional field length on stack
+              call  nz,0x0F16      ; No, fractional field length - 1
+              add   a,b            ; Add integer field length
+              ld    c,a            ; Total field length in C
+              ld    a,d            ; Test format flag
+              and   0x04           ; Sign behind number? (Bit 2)
+              cp    0x01           ; Yes, 0 in format flag
+              sbc   a,a            ; Otherwise -1
+              ld    d,a
+              add   a,c            ; Total length - 1, if sign not behind number
+              ld    c,a            ; in C
+              sub   e              ; - Exp - Precision + 1 results in
+              push  af             ; -Number of places to be rounded away
+              push  bc             ; Length parameter on stack
+; PUSTR_ROUND_LOOP: (defined in symbols.sym)
+              call  m,FINDIV       ; Round away places
+              jp    m,PUSTR_ROUND_LOOP ; Loop until count = 0
+              pop   bc             ; Load length parameter
+              pop   af             ; Number of rounded away places
+              push  bc             ; Length parameter back on stack
+              push  af             ; Number of rounded away places on stack
+              jp    m,PUSTR_ROUND_DONE ; Places rounded away? Yes to 11DEH
+              xor   a              ; No places rounded away
+; PUSTR_ROUND_DONE: (defined in symbols.sym)
+              cpl                  ; Determine positive number
+              inc   a              ; + 1
+              add   a,b            ; + Integer length
+              inc   a              ; + 1
+              add   a,d            ; - 1, if sign before number
+              ld    b,a            ; = Position of '.'
+              ld    c,0x00         ; Parameter for '.' and ',' = 0 (no ',')
+              call  FAC_TO_STR     ; Transfer string to buffer
+              pop   af             ; Total length - Precision > 0?
+              call  p,WRITE_ZEROS_FMT ; Yes, corresponding number of zeros in buffer
+              pop   bc             ; Reload length parameter
+              pop   af             ; Fractional length = 0?
+              call  z,DCXHRT       ; Yes, delete '.' in buffer
+              pop   af             ; Value = 0?
+              jr    c,@L35         ; Yes!
+              add   a,e            ; Determine exponent to be output
+              sub   b              ; SUB B
+              sub   d              ; SUB D
+@L35:
+              push  bc             ; Length parameter on stack
+              call  0x1074         ; Exponent in buffer
+              ex    de,hl          ; Buffer end address in HL
+              pop   de             ; Length parameter in DE
+              jp    0x10BF         ; Continue at 10BFH
+
+; Multiply or divide number by 10 as many times as needed until exactly 6 or 16
+; digits are present.
+; GET_10_EXP: (defined in symbols.sym)
+              push  de             ; Save DE
+              xor   a              ; Number of shifts = 0
+              push  af             ; Number of shifts on stack
+              rst   0x20           ; Test type
+; GET_10_EXP_SINGLE: (defined in symbols.sym)
+              jp    po,GET_10_EXP_START ; Single precision!
+@L36:
+              ld    a,(FAC)        ; Value >= 65536?
+              cp    0x91           ; Value >= 65536?
+              jp    nc,GET_10_EXP_START ; Yes!
+              ld    de,TENTEN      ; Address constant 1D10
+              ld    hl,FAC2        ; Address Y
+              call  VMOVE          ; Transfer 1D10 to Y
+              call  DMULT          ; Value * 1D10
+              pop   af             ; Load number of shifts
+              sub   0x0A           ; Subtract 10
+              push  af             ; And back on stack
+              jr    @L36           ; Continue
+; GET_10_EXP_START: (defined in symbols.sym)
+              call  GET_10_EXP_TEST ; Yes, continue at 1244H
+@L37:
+              rst   0x20           ; Test type
+              jp    pe,GET_10_EXP_DBL ; Double precision? Yes, to 1234H
+              ld    bc,0x9143      ; Constant 100000 in Y
+              ld    de,0x4FF9      ; Load DE with 4FF9H
+              call  FCOMP          ; Value > 100000?
+              jr    GET_10_EXP_LOOP ; Continue at 123AH
+; GET_10_EXP_DBL: (defined in symbols.sym)
+              ld    de,FOUTDL      ; Address constant 1D15
+              call  0x0A49         ; Value >= 1D15?
+; GET_10_EXP_LOOP: (defined in symbols.sym)
+              jp    p,0x124C       ; Yes!
+              pop   af             ; Load shifts
+              call  0x0F0B         ; Value / 10, shifts + 1
+              push  af             ; Shifts on stack
+              jr    @L37           ; Continue
+; GET_10_EXP_LOOP_2: (defined in symbols.sym)
+              pop   af             ; Load shifts
+              call  FINDIV         ; Value * 10, shifts - 1
+              push  af             ; Shifts on stack
+              call  GET_10_EXP_TEST ; Yes, continue at 124FH
+              pop   af             ; Load shifts
+              pop   de             ; Restore DE
+              ret                  ; Return
+
+; Test if number is large (>= 1E6 or 1D16)
+; GET_10_EXP_TEST: (defined in symbols.sym)
+              rst   0x20           ; Test type
+              jp    pe,0x125E      ; Double precision? Yes, to 125EH
+              ld    bc,0x9474      ; Constant 1E6 in Y
+              ld    de,0x23F8      ; Load DE with 23F8H
+              call  FCOMP          ; Value >= 1D6?
+              jr    @L38           ; Continue
+              ld    de,FOUTDU      ; Constant 1D16 in Y
+              call  0x0A49         ; Value >= 1D16?
+@L38:
+              pop   hl             ; Load return address
+              jp    p,GET_10_EXP_LOOP_2 ; Yes, to 1244H
+              jp    (hl)           ; No, normal return
+
+; Write zeros to buffer
+; WRITE_ZEROS: (defined in symbols.sym)
+              or    a              ; Count = 0?
+@L39:
+              ret   z              ; Yes, done
+              dec   a              ; Count - 1
+              ld    (hl),0x30      ; '0' in buffer
+              inc   hl             ; Buffer address + 1
+              jr    @L39           ; Continue at 126AH
+
+; Write zeros with '.' and ','
+WRITE_ZEROS_FMT:
+              jr    nz,@L1         ; Count > 0? Yes, jump
+@L2:
+              ret   z              ; = 0?, done
+              call  SET_DOT_COMMA  ; Set '.' and ','
+@L1:
+              ld    (hl),0x30      ; '0' in buffer
+              inc   hl             ; Buffer address + 1
+              dec   a              ; Count - 1
+              jr    @L2            ; Back
+
+; Determine '.' and ',' params
+GET_FMT_PARAMS:
+              ld    a,e            ; Number of shifts in A
+              add   a,d            ; + Precision
+              inc   a              ; + 1
+              ld    b,a            ; = Decimal point position
+              inc   a              ; + 1
+@L1:
+              sub   0x03           ; Determine position of ','
+              jr    nc,@L1         ; -3 until A is negative
+              add   a,0x05         ; + 5
+              ld    c,a            ; As ',' parameter in C
+              ld    a,(FMT_FLAG)   ; Load format flag
+              and   0x40           ; ',' requested? (Bit 6)
+              ret   nz             ; Yes, OK
+              ld    c,a            ; No, clear ',' parameter
+              ret                  ; Return
+
+; Set '.' and ','
+; SET_DOT_COMMA: (defined in symbols.sym)
+              dec   b              ; Decimal point position - 1
+              jr    nz,@L2         ; Decimal point reached? No!
+              ld    (hl),0x2E      ; '.' in buffer
+              ld    (SAVP),hl      ; Remember address of '.'
+              inc   hl             ; Buffer pointer + 1
+              ld    c,b            ; ',' = 0 (no more ',' to set)
+              ret                  ; Done
+@L2:
+              dec   c              ; ',' parameter - 1. Next position?
+              ret   nz             ; No, back
+              ld    (hl),0x2C      ; ',' in buffer
+              inc   hl             ; Buffer pointer + 1
+              ld    c,0x03         ; ',' parameter = 3 for next ','
+              ret                  ; Done
+
+; Convert single/double prec to ASCII
+; FAC_TO_STR: (defined in symbols.sym)
+              push  de             ; Save DE
+              rst   0x20           ; Test type
+              jp    po,0x12EA      ; Single precision? Continue at 12EAH
+              push  bc             ; Parameters for '.' and ',' on stack
+              push  hl             ; Buffer pointer on stack
+              call  VMOVAF         ; Number in Y
+              ld    hl,DHALF       ; Address constant 0.5
+              call  VMOVFM         ; 0.5 in X
+              call  DADD           ; Number + 0.5 to X
+              xor   a              ; Clear normalization flag (Cy)
+              call  0x0B7B         ; Separate fractional part
+              pop   hl             ; Load buffer pointer
+              pop   bc             ; Load '.' and ',' parameters
+              ld    de,FODTBL      ; Address fixed-point constants 1D15-1D16
+              ld    a,0x0A         ; Digit counter = 10
+@L4:
+              call  SET_DOT_COMMA  ; Set '.' and ','
+              push  bc             ; Save '.' and ',' parameters
+              push  af             ; Save digit counter
+              push  hl             ; Save buffer pointer
+              push  de             ; Save constant address
+              ld    b,0x2F         ; Digit value = '0' - 1
+@L3:
+              inc   b              ; Digit value + 1
+              pop   hl             ; Constant address in HL
+              push  hl             ; And back on stack
+              call  0x0D48         ; Number - constant. Underflow?
+              jr    nc,@L3         ; No, continue
+              pop   hl             ; Constant address in HL
+              call  0x0D36         ; Number + constant
+              ex    de,hl          ; Constant address in DE (next constant)
+              pop   hl             ; Load buffer pointer
+              ld    (hl),b         ; Enter digit in buffer
+              inc   hl             ; Buffer pointer + 1
+              pop   af             ; Load digit counter
+              pop   bc             ; Load '.' and ',' parameters
+              dec   a              ; Digit counter - 1. 10 digits produced?
+              jr    nz,@L4         ; No, continue
+              push  bc             ; Save '.' and ',' parameters
+              push  hl             ; Save buffer pointer
+              ld    hl,0x791D
+              call  MOVFM          ; Rest (< 1D6) with single precision in X
+              jr    FF_TO_ASCII_CONT ; Continue with single precision
+              push  bc             ; Parameters for '.' and ',' on stack
+              push  hl             ; Buffer pointer on stack
+              call  FP_ADD_HALF    ; Number + 0.5 for rounding
+              inc   a              ; Clear normalization flag
+              call  DROUND         ; Integer of number in Y
+              call  MOVFR          ; Enter number in X
+FF_TO_ASCII_CONT:
+              pop   hl             ; Load buffer pointer
+              pop   bc             ; Load '.' and ',' parameters
+              xor   a              ; Clear repetition flag
+              ld    de,FOSTBL      ; Address constants 1E5 and 1E4
+@L2:
+              ccf                  ; Invert repetition flag
+              call  SET_DOT_COMMA  ; Set '.' and ','
+              push  bc             ; Parameters for '.' and ',' on stack
+              push  af             ; Repetition flag on stack
+              push  hl             ; Buffer pointer on stack
+              push  de             ; Constant pointer in HL
+              call  MOVRF          ; Transfer number to Y
+              pop   hl             ; Constant pointer in HL
+              ld    b,0x2F         ; Digit code = '0' - 1
+@L1:
+              inc   b              ; Digit code + 1
+              ld    a,e            ; Number - constant. Underflow?
+              sub   (hl)           ; LSB
+              ld    e,a
+              inc   hl             ; Next digit
+              ld    a,d
+              sbc   a,(hl)
+              ld    d,a
+              inc   hl             ; MSB
+              ld    a,c
+              sbc   a,(hl)
+              ld    c,a
+              dec   hl             ; Constant pointer - 2
+              dec   hl             ; To 1st byte of constant
+              jr    nc,@L1         ; No underflow, back
+              call  0x07B7         ; Number + constant
+              inc   hl             ; Address next constant
+              call  MOVFR          ; Transfer number to X
+              ex    de,hl          ; Constant address in DE
+              pop   hl             ; Load buffer pointer
+              ld    (hl),b         ; Enter digit in buffer
+              inc   hl             ; Buffer pointer + 1
+              pop   af             ; Load repetition flag
+              pop   bc             ; Load '.' and ',' parameters
+              jr    c,@L2          ; 2 passes? No, back
+              inc   de             ; Skip next constant
+              inc   de
+              ld    a,0x04         ; 4 more digits in integer mode
+              jr    @L3            ; Process
+
+; Convert integer to ASCII
+; INT_TO_ASCII: (defined in symbols.sym)
+              push  de             ; Format flag on stack
+              ld    de,FOITBL      ; Address constants 10000 to 1
+              ld    a,0x05         ; Digit counter = 5
+@L3:
+              call  SET_DOT_COMMA  ; Output '.' and ','
+              push  bc             ; Parameters for '.' and ',' on stack
+              push  af             ; Digit counter on stack
+              push  hl             ; Buffer pointer on stack
+              ex    de,hl          ; Constant address in HL
+              ld    c,(hl)         ; Load constant
+              inc   hl             ; Address next constant
+              ld    b,(hl)
+              push  bc             ; And save on stack
+              inc   hl             ; Address next constant
+              ex    (sp),hl        ; Exchange constant address with constant on stack
+              ex    de,hl          ; Constant address in DE
+              ld    hl,(FACLO)     ; Load number in HL
+              ld    b,0x2F         ; Digit code = '0' - 1
+@L4:
+              inc   b              ; Digit code + 1
+              ld    a,l            ; Number - constant (LSB)
+              sub   e
+              ld    l,a
+              ld    a,h            ; Number - constant (MSB)
+              sbc   a,d
+              ld    h,a
+              jr    nc,@L4         ; Underflow? No, back
+              add   hl,de          ; Number + constant
+              ld    (FACLO),hl     ; Save number in X
+              pop   de             ; Load constant address
+              pop   hl             ; Load buffer pointer
+              ld    (hl),b         ; Enter digit in buffer
+              inc   hl             ; Buffer pointer + 1
+              pop   af             ; Load digit counter
+              pop   bc             ; Load '.' and ',' parameters
+              dec   a              ; Digit counter - 1
+              jr    nz,@L3         ; All digits? No, back
+              call  SET_DOT_COMMA  ; Output '.' and ','
+              ld    (hl),a         ; Mark end of line with X'00'
+              pop   de             ; Restore DE
+              ret                  ; Done
+
+; Constants
+; TENTEN: (defined in symbols.sym)
+              DEFB  0x00,0x00,0x00,0x00,0xF9,0x02,0x15,0xA2 ; 10 * 10^9 (double precision)
+
+; DOUBLE PRECISION CONSTANT STORAGE LOCATION - "FOUTDL"
+; A double precision constant equal to 999,999,999,999,999.95
+; FOUTDL: (defined in symbols.sym)
+              DEFB  0xFD,0xFF,0x9F,0x31,0xA9,0x5F,0x63,0xB2 ; 1 * 10^15 (double precision)
+
+; DOUBLE PRECISION CONSTANT STORAGE LOCATION - "FOUTDU"
+; A double precision constant equal to 9,999,999,999,999,999.5
+; FOUTDU: (defined in symbols.sym)
+              DEFB  0xFE,0xFF,0x03,0xBF,0xC9,0x1B,0x0E,0xB6 ; 1 * 10^16 (double precision)
+
+; DOUBLE PRECISION CONSTANT STORAGE LOCATION - "DHALF"
+; A double precision constant equal to 0.5D0
+; DHALF: (defined in symbols.sym)
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x80 ; 0.5 (double precision)
+
+; DOUBLE PRECISION CONSTANT STORAGE LOCATION - "FFXDXM"          
+; A double precision constant equal to 1D16                      
+; FFXDXM: (defined in symbols.sym)
+              DEFB  0x00,0x00,0x04,0xBF,0xC9,0x1B,0x0E,0xB6 ; 1 * 10^16 (double precision)
+
+; DOUBLE PRECISION INTEGER CONSTANT STORAGE LOCATION - "FODTBL"  
+; Powers of ten table (Double Precision)                         
+; FODTBL: (defined in symbols.sym)
+              DEFB  0x00,0x80,0xC6,0xA4,0x7E,0x8D,0x03 ; =   10000000000000000
+              DEFB  0x00,0x40,0x7A,0x10,0xF3,0x5A,0x00 ; =    1000000000000000
+              DEFB  0x00,0xA0,0x72,0x4E,0x18,0x09,0x00 ; =     100000000000000
+              DEFB  0x00,0x10,0xA5,0xD4,0xE8,0x00,0x00 ; =      10000000000000
+              DEFB  0x00,0xE8,0x76,0x48,0x17,0x00,0x00 ; =       1000000000000
+              DEFB  0x00,0xE4,0x0B,0x54,0x02,0x00,0x00 ; =        100000000000
+              DEFB  0x00,0xCA,0x9A,0x3B,0x00,0x00,0x00 ; =         10000000000
+              DEFB  0x00,0xE1,0xF5,0x05,0x00,0x00,0x00 ; =          1000000000
+              DEFB  0x80,0x96,0x98,0x00,0x00,0x00,0x00 ; =           100000000
+              DEFB  0x40,0x42,0x0F,0x00,0x00,0x00,0x00 ; =            10000000
+; FOSTBL: (defined in symbols.sym)
+              DEFB  0xA0,0x86,0x01 ; =                                 1000000
+              DEFB  0x10,0x27,0x00 ; =                                  100000
+; FOITBL: (defined in symbols.sym)
+              DEFB  0x10,0x27      ; =                                   10000
+              DEFB  0xE8,0x03      ; =                                    1000
+              DEFB  0x64,0x00      ; =                                     100
+              DEFB  0x0A,0x00      ; =                                      10
+; GETADR: (defined in symbols.sym)
+              DEFB  0x01,0x00      ; =                                       1
+
+; Subroutine for SQR and ATN                                     
+; Performs multiplication with -1                                
+; GETADR_ENTRY_2: (defined in symbols.sym)
+              ld    hl,NNEG        ; X = -X - address in HL
+              ex    (sp),hl        ; swap with return address on stack
+              jp    (hl)           ; return to calling routine
+
+; SQR function                                                   
+; Computes the square root of a number                           
+; FNSQR: (defined in symbols.sym)
+              call  PUSHF          ; Pack argument on the stack
+              ld    hl,FHALF       ; Address constant 0.5
+              call  MOVFM          ; and transfer to X
+              jr    @L5            ; continue at 13F5H
+
+; Determine the power of a number                                
+; Input:  Base on the stack                                      
+              call  FRCSNG         ; Convert exponent to single precision
+@L5:
+              pop   bc             ; Transfer base to Y
+              pop   de             ; Transfer base to Y
+
+; EXPONENTIATION FUNCTION (^) - "FNPWR"  
+; FNPWR: (defined in symbols.sym)
+              call  SIGN           ; Test exponent
+              ld    a,b            ; Exponent of base in A
+              jr    z,@L6          ; Exponent = 0? yes, result = 1
+              jp    p,0x1404       ; Exponent > 0? yes, jump
+              or    a              ; Base = 0 and exponent < 0?
+              jp    z,DIV_ZERO_ERR_HANDLER ; yes, DIVISION BY ZERO error
+              or    a              ; Base = 0 and exponent > 0?
+              jp    z,0x0779       ; yes, 0 as result in X
+              push  de             ; Base on stack
+              push  bc             ; Base on stack
+              ld    a,c            ; Base > 0?
+              or    0x7F           ; Mask sign bit
+              call  MOVRF          ; Transfer exponent to Y
+              jp    p,0x1421       ; Base > 0
+              push  de             ; Exponent on stack
+              push  bc             ; Exponent on stack
+              call  0x0B40         ; Integer portion of exponent in X
+              pop   bc             ; Reload exponent
+              pop   de             ; Reload exponent
+              push  af             ; LSB of INT(exponent) on stack
+              call  FCOMP          ; INT(exponent) = exponent?
+              pop   hl             ; LSB of INT(exponent) in HL
+              ld    a,h            ; INT(exponent) odd?
+              rra                  ; Rotate right
+              pop   hl             ; Transfer base to X
+              ld    (FAC_SIGN),hl  ; MSB
+              pop   hl             ; Transfer base to X
+              ld    (FACLO),hl     ; LSB
+              call  c,GETADR_ENTRY_2 ; Result * (-1)
+              call  z,NNEG         ; Base = -base
+              push  de             ; Exponent on stack
+              push  bc             ; Exponent on stack
+              call  FNLOG          ; LOG(base) to X
+              pop   bc             ; Load exponent into Y
+              pop   de             ; Load exponent into Y
+              call  0x0847         ; LOG(base) * exponent
+
+; EXP function                                                   
+; Determine the exponential function of a number                 
+@L6:
+              call  PUSHF          ; Argument on stack
+              ld    bc,0x8138      ; Constant 1.4427 in Y
+              ld    de,0xAA3B      ; Constant 1.4427 in Y
+              call  0x0847         ; Argument / LOG(2) in X
+              ld    a,(FAC)        ; Binary exponent of result > 136?
+              cp    0x88           ; Compare with 136
+              jp    nc,MLDVEX      ; yes, continue at 0931H
+              call  0x0B40         ; INT(exponent) in A and X
+              add   a,0x80         ; Add offset
+              add   a,0x02         ; Exponent > 126?
+              jp    c,MLDVEX       ; yes, continue at 0931H
+              push  af             ; Exponent (with offset) on stack
+              ld    hl,FONE        ; INT(Arg / LOG(2)) - 1 into X
+              call  0x070B         ; INT(Arg / LOG(2)) - 1 into X
+              call  MULLN2         ; * LOG(2)
+              pop   af             ; Exponent of result back
+              pop   bc             ; Reload argument
+              pop   de             ; Reload argument
+              push  af             ; Exponent back on stack
+              call  FP_SUB_Y_MINUS_X ; X = (LOG(2) * INT(Arg / LN2) - 1) - Arg
+              call  NNEG           ; Complement (negate)
+              ld    hl,EXP_CONSTANTS ; Evaluate series
+              call  0x14A9         ; Evaluate series
+              ld    de,START       ; 0.5 * 2^exponent in Y
+              pop   bc             ; Reload exponent
+              ld    c,d            ; Reload exponent
+              jp    0x0847         ; Multiply with series result
+
+; Constants for exponent series    
+; EXP_CONSTANTS: (defined in symbols.sym)
+              DEFB  0x08           ; 8 constants
+              DEFB  0x40,0x2E,0x94,0x74 ; = -1.41316 E-04
+              DEFB  0x70,0x4F,0x2E,0x77 ; =  1.32988 E-03
+              DEFB  0x6E,0x02,0x88,0x7A ; = -8.30136 E-03
+              DEFB  0xE6,0xA0,0x2A,0x7C ; =  0.0416574
+              DEFB  0x50,0xAA,0xAA,0x7E ; = -0.166665
+              DEFB  0xFF,0xFF,0x7F,0x7F ; =  0.5
+              DEFB  0x00,0x00,0x80,0x81 ; = -1
+              DEFB  0x00,0x00,0x00,0x81 ; =  1
+
+; Series calculation 1
+; K1 * Z + K2 * Z^3 + K3 * Z^5                                   
+; POLYN: (defined in symbols.sym)
+              call  PUSHF          ; Transfer X to stack
+              ld    de,0x0C32      ; Return address on stack
+              push  de             ; (effects multiplication with Z at the end)
+              push  hl             ; Constant address on stack
+              call  MOVRF          ; Transfer Z to Y
+              call  0x0847         ; Z^2 to X
+              pop   hl             ; Constant address in HL
+
+; Series calculation 2                                           
+; K1 + K2 * Z + K3 * Z^2 + K4 * Z^3                               
+; Input:  Same as series calculation 1 
+; Output: Same as series calculation 1                           
+              call  PUSHF          ; Z on stack
+              ld    a,(hl)         ; Number of constants in A
+              inc   hl             ; Address of 1st constant
+              call  MOVFM          ; 1st constant in X
+              DEFB  0x06           ; Dummy command (LD B, 0xF1)
+@L7:
+              pop   af             ; Load constant counter
+              pop   bc             ; Z or Z^2 (series 2 or 1) in Y
+              pop   de             ; Z or Z^2 (series 2 or 1) in Y
+              dec   a              ; Constant counter - 1
+              ret   z              ; finished!
+              push  de             ; Y back on stack
+              push  bc             ; Y back on stack
+              push  af             ; Constant counter on stack
+              push  hl             ; Constant address on stack
+              call  0x0847         ; X * Z (or Z^2)
+              pop   hl             ; Load constant address
+              call  MOVRM          ; Next constant in Y
+              push  hl             ; Constant address on stack
+              call  FP_ADD_X_PLUS_Y ; Add constant to X
+              pop   hl             ; Reload constant address
+              jr    @L7            ; continue
+
+; RND - Function
+; Generate random number
+; FNRND: (defined in symbols.sym)
+              call  FRCINT         ; Convert argument to integer
+              ld    a,h            ; Is argument < 0?
+              or    a
+              jp    m,0x1E4A       ; Yes, FUNCTION CODE error
+              or    l              ; Is argument = 0?
+              jp    z,RND0         ; Yes, generate random number between 0 and 1
+              push  hl             ; Argument on stack
+              call  RND0           ; Real random number in X
+              call  MOVRF          ; Transfer to Y
+              ex    de,hl          ; Reload argument and
+              ex    (sp),hl        ; Random number on stack
+              push  bc
+              call  0x0ACF         ; Argument with single precision in X
+              pop   bc             ; Random number back in Y
+              pop   de
+              call  0x0847         ; Random number * Argument
+              ld    hl,FONE        ; + 1
+              call  0x070B
+              jp    0x0B40         ; Result = INT(random number * Arg + 1)
+
+; New random number = old random number * 4253261 + 372837
+; RND0: (defined in symbols.sym)
+              ld    hl,RND_MULT_TABLE ; Address of the multiplier
+              push  hl             ; on stack
+              ld    de,START       ; Clear result register (CDE)
+              ld    c,e
+              ld    h,0x03         ; Byte counter = 3
+; RND00: (defined in symbols.sym)
+              ld    l,0x08         ; Bit counter = 8
+; RND01: (defined in symbols.sym)
+              ex    de,hl          ; Result register * 2
+              add   hl,hl          ; LSB
+              ex    de,hl
+              ld    a,c            ; MSB
+              rla   
+              ld    c,a
+              ex    (sp),hl        ; Multiplier address in HL
+              ld    a,(hl)         ; Byte of the multiplier in A
+              rlca                 ; Most significant bit in carry
+              ld    (hl),a         ; and save it back
+              ex    (sp),hl        ; Multiplier address on stack
+              jp    nc,RND02       ; Bit not set, no addition
+              push  hl
+              ld    hl,(RND_SEED)  ; Add last random number
+              add   hl,de          ; LSB
+              ex    de,hl
+              ld    a,(0x78AC)     ; MSB
+              adc   a,c
+              ld    c,a
+              pop   hl
+; RND02: (defined in symbols.sym)
+              dec   l              ; Bit counter - 1
+              jp    nz,RND01       ; Byte processed? no-back
+              ex    (sp),hl        ; Multiplier address in HL
+              inc   hl             ; + 1
+              ex    (sp),hl        ; and back on the stack
+              dec   h              ; Byte counter - 1
+              jp    nz,RND00       ; Finished? no-back
+              pop   hl             ; Correct stack
+              ld    hl,0xB065      ; Result + 372837 = new random number
+              add   hl,de          ; LSB
+              ld    (RND_SEED),hl
+              call  VALSNG         ; Type = single precision
+              ld    a,0x05         ; MSB
+              adc   a,c
+              ld    (0x78AC),a
+              ex    de,hl          ; Transfer to Y
+              ld    b,0x80         ; Exp. Y = 0, so that it's between 0 and 1
+              ld    hl,0x7925      ; Set sign flag
+              ld    (hl),b         ; Result = positive
+              dec   hl             ; Exponent X = Exponent Y
+              ld    (hl),b
+              ld    c,a            ; MSB in C
+              ld    b,0x00         ; Clear LSB
+              jp    0x0765         ; to normalization
+
+; COS - Function
+; Determine the cosine of an angle
+; FNCOS: (defined in symbols.sym)
+              ld    hl,PI2         ; Address constant PI/2
+              call  0x070B         ; Add PI/2 to argument
+
+; SIN - Function
+; Determine the sine of an angle
+; FNSIN: (defined in symbols.sym)
+              call  PUSHF          ; Argument on stack
+              ld    bc,0x8349      ; Constant 2PI in Y
+              ld    de,0x0FDB
+              call  MOVFR          ; Transfer 2PI to X
+              pop   bc             ; Argument in Y
+              pop   de
+              call  0x08A2         ; X = Argument / 2PI
+              call  PUSHF          ; Argument / 2PI on stack
+              call  0x0B40         ; INT(Arg/2PI) in X
+              pop   bc             ; Arg/2PI from stack in Y
+              pop   de
+              call  FP_SUB_Y_MINUS_X ; X = Arg/2PI - INT(Arg/2PI)
+
+; Transform interval (0..1) to interval (-0.25 ... 0.25)
+              ld    hl,F025        ; Address constant 0.25
+              call  FP_SUB_HALF    ; 0.25 - X in X
+              call  SIGN           ; Is X >= 0?
+              scf                  ; Clear flag for multiplication with (-1)
+              jp    p,0x1577       ; Yes!
+              call  FP_ADD_HALF    ; 0.5 + X in X
+              call  SIGN           ; Is X >= 0?
+              or    a              ; Set flag for multiplication with (-1)
+              push  af             ; Flag on stack
+              call  p,NNEG         ; Yes! X = -X
+              ld    hl,F025        ; Address constant 0.25
+              call  0x070B         ; 0.25 + X in X
+              pop   af             ; Load flag
+              call  nc,NNEG        ; Carry = 0? yes - X = -X
+              ld    hl,SIN_CONST   ; Constants for series calculation
+              jp    POLYN          ; Calculate series
+
+; Precomputed Trigonometric Constants (pi/2, fractional scalars)
+; PI2: (defined in symbols.sym)
+              DEFB  0xDB,0x0F,0x49,0x81 ; = pi/2 (1.5708)
+; F025: (defined in symbols.sym)
+              DEFB  0x00,0x00,0x00,0x7F ; = 1/4 (0.25)
+
+; for sine series calculation
+; SIN_CONST: (defined in symbols.sym)
+              DEFB  0x05           ; Number of Coefficients
+              DEFB  0xBA,0xD7,0x1E,0x86 ; 39.7107
+              DEFB  0x64,0x26,0x99,0x87 ; -76.575
+              DEFB  0x58,0x34,0x23,0x87 ; 81.6022
+              DEFB  0xE0,0x5D,0xA5,0x86 ; -41.3417
+              DEFB  0xDA,0x0F,0x49,0x83 ; 6.28319
+
+; TAN - Function
+; Calculates the tangent of an angle
+; FNTAN: (defined in symbols.sym)
+              call  PUSHF          ; Argument on stack
+              call  FNSIN          ; Determine Sin(Arg)
+              pop   bc             ; Argument in Y
+              pop   hl
+              call  PUSHF          ; Sin(Arg) on stack
+              ex    de,hl
+              call  MOVFR          ; Transfer argument to X
+              call  FNCOS          ; Determine Cos(Arg)
+              jp    0x08A0         ; Tan(Arg) = Sin(Arg) / Cos(Arg)
+
+; ATN - Function
+; Arc-tangent calculation
+; FNATN: (defined in symbols.sym)
+              call  SIGN           ; Is argument < 0?
+              call  m,GETADR_ENTRY_2 ; Yes, result * (-1)
+              call  m,NNEG         ; Abs(Argument) in X
+              ld    a,(FAC)        ; Is argument < 1?
+              cp    0x81
+              jr    c,@L8          ; Yes!
+              ld    bc,0x8100      ; No! Y = 1
+              ld    d,c
+              ld    e,c
+              call  0x08A2         ; X = 1 / Argument
+              ld    hl,FP_SUB_HALF ; Jump address to 0710 on stack
+              push  hl             ; on stack
+@L8:
+              ld    hl,ATN_CONST   ; Address constants for series
+              call  POLYN          ; Calculate series
+              ld    hl,PI2         ; Load address of PI/2
+              ret                  ; continue at 0710H
+
+; Constants for the Arcus-Tangens series
+; ATN_CONST: (defined in symbols.sym)
+              DEFB  0x09           ; Number = 9
+              DEFB  0x4A,0xD7,0x3B,0x78 ; = 2.86623 E-03
+              DEFB  0x02,0x6E,0x84,0x7B ; = -0.0161657
+              DEFB  0xFE,0xC1,0x2F,0x7C ; = 0.0429096
+              DEFB  0x74,0x31,0x9A,0x7D ; = -0.0752896
+              DEFB  0x84,0x3D,0x5A,0x7D ; = 0.106563
+              DEFB  0xC8,0x7F,0x91,0x7E ; = -0.142089
+              DEFB  0xE4,0xBB,0x4C,0x7E ; = 0.199936
+              DEFB  0x6C,0xAA,0xAA,0x7F ; = -0.333331
+              DEFB  0x00,0x00,0x00,0x81 ; = 1
+
+; (Tokens D7 to FA)
+              DEFW  0x098A         ; D7 = SGN
+              DEFW  0x0B37         ; D8 = INT
+              DEFW  0x0977         ; D9 = ABS
+              DEFW  0x27D4,0x2AEF,0x27F5 ; DA = FRE
+              DEFW  0x13E7         ; DD = SQR
+              DEFW  0x14C9         ; DE = RND
+              DEFW  0x0809         ; DF = LOG
+              DEFW  0x1439         ; E0 = EXP
+              DEFW  0x1541         ; E1 = COS
+              DEFW  0x1547         ; E2 = SIN
+              DEFW  0x15A8         ; E3 = TAN
+              DEFW  0x15BD         ; E4 = ATN
+              DEFW  0x2CAA         ; E5 = PEEK
+              DEFW  0x7952         ; E6 = CVI
+              DEFW  0x7958         ; E7 = CVS
+              DEFW  0x795E         ; E8 = CVD
+              DEFW  0x7961         ; E9 = EOF
+              DEFW  0x7964         ; EA = LOC
+              DEFW  0x7967         ; EB = LOF
+              DEFW  0x796A         ; EC = MKI$
+              DEFW  0x796D         ; ED = MKS$
+              DEFW  0x7970         ; EE = MKD$
+              DEFW  0x0A7F         ; EF = CINT
+              DEFW  0x0AB1         ; F0 = CSNG
+              DEFW  0x0ADB         ; F1 = CDBL
+              DEFW  0x0B26         ; F2 = FIX
+              DEFW  0x2A03,0x2836  ; F3 = LEN
+              DEFW  0x2AC5,0x2A0F  ; F5 = VAL
+              DEFW  0x2A1F,0x2A61  ; F7 = CHR$
+              DEFW  0x2A91,0x2A9A  ; F9 = RIGHT$
+
+; BASIC keyword table (sorted by token in ascending order)
+KWD_80_END:
+              DEFB  0xC5           ; 80 = END ('E'+0x80)
+              DEFM  "ND"
+              DEFB  0xC6           ; 81 = FOR ('F'+0x80)
+              DEFM  "OR"
+              DEFB  0xD2           ; 82 = RESET ('R'+0x80)
+              DEFM  "ESET"
+              DEFB  0xD3           ; 83 = SET ('S'+0x80)
+              DEFM  "ET"
+              DEFB  0xC3           ; 84 = CLS ('C'+0x80)
+              DEFM  "LS"
+KWD_85_CMD:
+              DEFB  0x81           ; 85 = CMD (not coded)
+              DEFB  0x00,0x00
+KWD_86_RANDOM:
+              DEFB  0x81           ; 86 = RANDOM (not coded)
+              DEFB  0x00,0x00,0x00,0x00,0x00
+KWD_87_NEXT:
+              DEFB  0xCE           ; 87 = NEXT ('N'+0x80)
+              DEFM  "EXT"
+KWD_88_DATA:
+              DEFB  0xC4           ; 88 = DATA ('D'+0x80)
+              DEFM  "ATA"
+KWD_89_INPUT:
+              DEFB  0xC9           ; 89 = INPUT ('I'+0x80)
+              DEFM  "NPUT"
+KWD_8A_DIM:
+              DEFB  0xC4           ; 8A = DIM ('D'+0x80)
+              DEFM  "IM"
+KWD_8B_READ:
+              DEFB  0xD2           ; 8B = READ ('R'+0x80)
+              DEFM  "EAD"
+KWD_8C_LET:
+              DEFB  0xCC           ; 8C = LET ('L'+0x80)
+              DEFM  "ET"
+KWD_8D_GOTO:
+              DEFB  0xC7           ; 8D = GOTO ('G'+0x80)
+              DEFM  "OTO"
+KWD_8E_RUN:
+              DEFB  0xD2           ; 8E = RUN ('R'+0x80)
+              DEFM  "UN"
+KWD_8F_IF:
+              DEFB  0xC9           ; 8F = IF ('I'+0x80)
+              DEFM  "F"
+KWD_90_RESTORE:
+              DEFB  0xD2           ; 90 = RESTORE ('R'+0x80)
+              DEFM  "ESTORE"
+KWD_91_GOSUB:
+              DEFB  0xC7           ; 91 = GOSUB ('G'+0x80)
+              DEFM  "OSUB"
+KWD_92_RETURN:
+              DEFB  0xD2           ; 92 = RETURN ('R'+0x80)
+              DEFM  "ETURN"
+KWD_93_REM:
+              DEFB  0xD2           ; 93 = REM ('R'+0x80)
+              DEFM  "EM"
+KWD_94_STOP:
+              DEFB  0xD3           ; 94 = STOP ('S'+0x80)
+              DEFM  "TOP"
+KWD_95_ELSE:
+              DEFB  0xC5           ; 95 = ELSE ('E'+0x80)
+              DEFM  "LSE"
+KWD_96_COPY:
+              DEFB  0xC3           ; 96 = COPY ('C'+0x80)
+              DEFM  "OPY"
+KWD_97_COLOR:
+              DEFB  0xC3           ; 97 = COLOR ('C'+0x80)
+              DEFM  "OLOR"
+KWD_98_VERIFY:
+              DEFB  0xD6           ; 98 = VERIFY ('V'+0x80)
+              DEFM  "ERIFY"
+KWD_99_DEFINT:
+              DEFB  0x81           ; 99 = DEFINT (not coded)
+              DEFB  0x00,0x00,0x00,0x00,0x00
+KWD_9A_DEFSNG:
+              DEFB  0x81           ; 9A = DEFSNG (not coded)
+              DEFB  0x00,0x00,0x00,0x00,0x00
+KWD_9B_DEFDBL:
+              DEFB  0x81           ; 9B = DEFDBL (not coded)
+              DEFB  0x00,0x00,0x00,0x00,0x00
+KWD_9C_CRUN:
+              DEFB  0xC3           ; 9C = CRUN ('C'+0x80)
+              DEFM  "RUN"
+KWD_9D_MODE:
+              DEFB  0xCD           ; 9D = MODE ('M'+0x80)
+              DEFM  "ODE"
+KWD_9E_SOUND:
+              DEFB  0xD3           ; 9E = SOUND ('S'+0x80)
+              DEFM  "OUND"
+KWD_9F_RESUME:
+              DEFB  0x81           ; 9F = RESUME (not coded)
+              DEFB  0x00,0x00,0x00,0x00,0x00
+KWD_A0_OUT:
+              DEFB  0xCF           ; A0 = OUT ('O'+0x80)
+              DEFM  "UT"
+KWD_A1_ON:
+              DEFB  0x81           ; A1 = ON (not coded)
+              DEFB  0x00
+KWD_A2_OPEN:
+              DEFB  0x81           ; A2 = OPEN (not coded)
+              DEFB  0x00,0x00,0x00
+KWD_A3_FIELD:
+              DEFB  0x81           ; A3 = FIELD (not coded)
+              DEFB  0x00,0x00,0x00,0x00
+KWD_A4_GET:
+              DEFB  0x81           ; A4 = GET (not coded)
+              DEFB  0x00,0x00
+KWD_A5_PUT:
+              DEFB  0x81           ; A5 = PUT (not coded)
+              DEFB  0x00,0x00
+KWD_A6_CLOSE:
+              DEFB  0x81           ; A6 = CLOSE (not coded)
+              DEFB  0x00,0x00,0x00,0x00
+KWD_A7_LOAD:
+              DEFB  0x81           ; A7 = LOAD (not coded)
+              DEFB  0x00,0x00,0x00
+KWD_A8_MERGE:
+              DEFB  0x81           ; A8 = MERGE (not coded)
+              DEFB  0x00,0x00,0x00,0x00
+KWD_A9_NAME:
+              DEFB  0x81           ; A9 = NAME (not coded)
+              DEFB  0x00,0x00,0x00
+KWD_AA_KILL:
+              DEFB  0x81           ; AA = KILL (not coded)
+              DEFB  0x00,0x00,0x00
+KWD_AB_LSET:
+              DEFB  0x81           ; AB = LSET (not coded)
+              DEFB  0x00,0x00,0x00
+KWD_AC_RSET:
+              DEFB  0x81           ; AC = RSET (not coded)
+              DEFB  0x00,0x00,0x00
+KWD_AD_SAVE:
+              DEFB  0x81           ; AD = SAVE (not coded)
+              DEFB  0x00,0x00,0x00
+KWD_AE_SYSTEM:
+              DEFB  0x81           ; AE = SYSTEM (not coded)
+              DEFB  0x00,0x00,0x00,0x00,0x00
+KWD_AF_LPRINT:
+              DEFB  0xCC           ; AF = LPRINT ('L'+0x80)
+              DEFM  "PRINT"
+KWD_B0_DEF:
+              DEFB  0x81           ; B0 = DEF (not coded)
+              DEFB  0x00,0x00
+KWD_B1_POKE:
+              DEFB  0xD0           ; B1 = POKE ('P'+0x80)
+              DEFM  "OKE"
+KWD_B2_PRINT:
+              DEFB  0xD0           ; B2 = PRINT ('P'+0x80)
+              DEFM  "RINT"
+KWD_B3_CONT:
+              DEFB  0xC3           ; B3 = CONT ('C'+0x80)
+              DEFM  "ONT"
+KWD_B4_LIST:
+              DEFB  0xCC           ; B4 = LIST ('L'+0x80)
+              DEFM  "IST"
+KWD_B5_LLIST:
+              DEFB  0xCC           ; B5 = LLIST ('L'+0x80)
+              DEFM  "LIST"
+KWD_B6_DELETE:
+              DEFB  0x81           ; B6 = DELETE (not coded)
+              DEFB  0x00,0x00,0x00,0x00,0x00 ; not coded
+KWD_B7_AUTO:
+              DEFB  0x81           ; B7 = AUTO (not coded)
+              DEFB  0x00,0x00,0x00 ; not coded
+KWD_B8_CLEAR:
+              DEFB  0xC3           ; B8 = CLEAR ('C'+0x80)
+              DEFM  "LEAR"
+KWD_B9_CLOAD:
+              DEFB  0xC3           ; B9 = CLOAD ('C'+0x80)
+              DEFM  "LOAD"
+KWD_BA_CSAVE:
+              DEFB  0xC3           ; BA = CSAVE ('C'+0x80)
+              DEFM  "SAVE"
+KWD_BB_NEW:
+              DEFB  0xCE           ; BB = NEW ('N'+0x80)
+              DEFM  "EW"
+KWD_BC_TAB:
+              DEFB  0xD4           ; BC = TAB( ('T'+0x80)
+              DEFM  "AB("
+KWD_BD_TO:
+              DEFB  0xD4           ; BD = TO ('T'+0x80)
+              DEFM  "O"
+KWD_BE_FN:
+              DEFB  0x81           ; BE = FN (not coded)
+              DEFB  0x00           ; not coded
+KWD_BF_USING:
+              DEFB  0xD5           ; BF = USING ('U'+0x80)
+              DEFM  "SING"
+KWD_C0_VARPTR:
+              DEFB  0x81           ; C0 = VARPTR (not coded)
+              DEFB  0x00,0x00,0x00,0x00,0x00 ; not coded
+KWD_C1_USR:
+              DEFB  0xD5           ; C1 = USR ('U'+0x80)
+              DEFM  "SR"
+KWD_C2_ERL:
+              DEFB  0x81           ; C2 = ERL (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_C3_ERR:
+              DEFB  0x81           ; C3 = ERR (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_C4_STRINGS:
+              DEFB  0x81           ; C4 = STRING$ (not coded)
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x00 ; not coded
+KWD_C5_INSTR:
+              DEFB  0x81           ; C5 = INSTR (not coded)
+              DEFB  0x00,0x00,0x00,0x00 ; not coded
+KWD_C6_POINT:
+              DEFB  0xD0           ; C6 = POINT ('P'+0x80)
+              DEFM  "OINT"
+KWD_C7_TIMES:
+              DEFB  0x81           ; C7 = TIME$ (not coded)
+              DEFB  0x00,0x00,0x00,0x00 ; not coded
+KWD_C8_MEM:
+              DEFB  0x81           ; C8 = MEM (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_C9_INKEYS:
+              DEFB  0xC9           ; C9 = INKEY$ ('I'+0x80)
+              DEFM  "NKEY$"
+KWD_CA_THEN:
+              DEFB  0xD4           ; CA = THEN ('T'+0x80)
+              DEFM  "HEN"
+KWD_CB_NOT:
+              DEFB  0xCE           ; CB = NOT ('N'+0x80)
+              DEFM  "OT"
+KWD_CC_STEP:
+              DEFB  0xD3           ; CC = STEP ('S'+0x80)
+              DEFM  "TEP"
+KWD_CD_PLUS:
+              DEFB  0xAB           ; CD = + ('+'+0x80)
+KWD_CE_MINUS:
+              DEFB  0xAD           ; CE = - ('-'+0x80)
+KWD_CF_MUL:
+              DEFB  0xAA           ; CF = * ('*'+0x80)
+KWD_D0_DIV:
+              DEFB  0xAF           ; D0 = / ('/'+0x80)
+KWD_D1_UP:
+              DEFB  0xDE           ; D1 = ^ (exponentiation) (0x5E+0x80)
+KWD_D2_AND:
+              DEFB  0xC1           ; D2 = AND ('A'+0x80)
+              DEFM  "ND"
+KWD_D3_OR:
+              DEFB  0xCF           ; D3 = OR ('O'+0x80)
+              DEFM  "R"
+KWD_D4_GT:
+              DEFB  0xBE           ; D4 = > ('>'+0x80)
+KWD_D5_EQ:
+              DEFB  0xBD           ; D5 = = ('='+0x80)
+KWD_D6_LT:
+              DEFB  0xBC           ; D6 = < ('<'+0x80)
+KWD_D7_SGN:
+              DEFB  0xD3           ; D7 = SGN ('S'+0x80)
+              DEFM  "GN"
+KWD_D8_INT:
+              DEFB  0xC9           ; D8 = INT ('I'+0x80)
+              DEFM  "NT"
+KWD_D9_ABS:
+              DEFB  0xC1           ; D9 = ABS ('A'+0x80)
+              DEFM  "BS"
+KWD_DA_FRE:
+              DEFB  0x81           ; DA = FRE (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_DB_INP:
+              DEFB  0xC9           ; DB = INP ('I'+0x80)
+              DEFM  "NP"
+KWD_DC_POS:
+              DEFB  0x81           ; DC = POS (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_DD_SQR:
+              DEFB  0xD3           ; DD = SQR ('S'+0x80)
+              DEFM  "QR"
+KWD_DE_RND:
+              DEFB  0xD2           ; DE = RND ('R'+0x80)
+              DEFM  "ND"
+KWD_DF_LOG:
+              DEFB  0xCC           ; DF = LOG ('L'+0x80)
+              DEFM  "OG"
+KWD_E0_EXP:
+              DEFB  0xC5           ; E0 = EXP ('E'+0x80)
+              DEFM  "XP"
+KWD_E1_COS:
+              DEFB  0xC3           ; E1 = COS ('C'+0x80)
+              DEFM  "OS"
+KWD_E2_SIN:
+              DEFB  0xD3           ; E2 = SIN ('S'+0x80)
+              DEFM  "IN"
+KWD_E3_TAN:
+              DEFB  0xD4           ; E3 = TAN ('T'+0x80)
+              DEFM  "AN"
+KWD_E4_ATN:
+              DEFB  0xC1           ; E4 = ATN ('A'+0x80)
+              DEFM  "TN"
+KWD_E5_PEEK:
+              DEFB  0xD0           ; E5 = PEEK ('P'+0x80)
+              DEFM  "EEK"
+KWD_E6_CVI:
+              DEFB  0x81           ; E6 = CVI (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_E7_CVS:
+              DEFB  0x81           ; E7 = CVS (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_E8_CVD:
+              DEFB  0x81           ; E8 = CVD (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_E9_EOF:
+              DEFB  0x81           ; E9 = EOF (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_EA_LOC:
+              DEFB  0x81           ; EA = LOC (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_EB_LOF:
+              DEFB  0x81           ; EB = LOF (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_EC_MKIS:
+              DEFB  0x81           ; EC = MKI$ (not coded)
+              DEFB  0x00,0x00,0x00 ; not coded
+KWD_ED_MKSS:
+              DEFB  0x81           ; ED = MKS$ (not coded)
+              DEFB  0x00,0x00,0x00 ; not coded
+KWD_EE_MKDS:
+              DEFB  0x81           ; EE = MKD$ (not coded)
+              DEFB  0x00,0x00,0x00 ; not coded
+KWD_EF_CINT:
+              DEFB  0x81           ; EF = CINT (not coded)
+              DEFB  0x00,0x00,0x00 ; not coded
+KWD_F0_CSNG:
+              DEFB  0x81           ; F0 = CSNG (not coded)
+              DEFB  0x00,0x00,0x00 ; not coded
+KWD_F1_CDBL:
+              DEFB  0x81           ; F1 = CDBL (not coded)
+              DEFB  0x00,0x00,0x00 ; not coded
+KWD_F2_FIX:
+              DEFB  0x81           ; F2 = FIX (not coded)
+              DEFB  0x00,0x00      ; not coded
+KWD_F3_LEN:
+              DEFB  0xCC           ; F3 = LEN ('L'+0x80)
+              DEFM  "EN"
+KWD_F4_STRS:
+              DEFB  0xD3           ; F4 = STR$ ('S'+0x80)
+              DEFM  "TR$"
+KWD_F5_VAL:
+              DEFB  0xD6           ; F5 = VAL ('V'+0x80)
+              DEFM  "AL"
+KWD_F6_ASC:
+              DEFB  0xC1           ; F6 = ASC ('A'+0x80)
+              DEFM  "SC"
+KWD_F7_CHRS:
+              DEFB  0xC3           ; F7 = CHR$ ('C'+0x80)
+              DEFM  "HR$"
+KWD_F8_LEFTS:
+              DEFB  0xCC           ; F8 = LEFT$ ('L'+0x80)
+              DEFM  "EFT$"
+KWD_F9_RIGHTS:
+              DEFB  0xD2           ; F9 = RIGHT$ ('R'+0x80)
+              DEFM  "IGHT$"
+KWD_FA_MIDS:
+              DEFB  0xCD           ; FA = MID$ ('M'+0x80)
+              DEFM  "ID$"
+KWD_FB_SPACE:
+              DEFB  0xA7           ; FB = ' ('\''+0x80)
+KWD_END_TABLE:
+              DEFB  0x80           ; End of table
+
+; (Token 80 - BB)
+              DEFW  0x1DAE         ; 80 = END
+              DEFW  0x1CA1         ; 81 = FOR
+              DEFW  0x0138         ; 82 = RESET
+              DEFW  0x0135         ; 83 = SET
+              DEFW  0x01C9         ; 84 = CLS
+              DEFW  0x7973         ; 85 = CMD
+              DEFW  0x01D3         ; 86 = RANDOM
+              DEFW  0x22B6         ; 87 = NEXT
+              DEFW  0x1F05         ; 88 = DATA
+              DEFW  0x219A         ; 89 = INPUT
+              DEFW  0x2608         ; 8A = DIM
+              DEFW  0x21EF         ; 8B = READ
+              DEFW  0x1F21         ; 8C = LET
+              DEFW  0x1EC2         ; 8D = GOTO
+              DEFW  0x1EA3         ; 8E = RUN
+              DEFW  0x2039         ; 8F = IF
+              DEFW  0x1D91         ; 90 = RESTORE
+              DEFW  0x1EB1         ; 91 = GOSUB
+              DEFW  0x1EDE         ; 92 = RETURN
+              DEFW  0x1F07         ; 93 = REM
+              DEFW  0x1DA9         ; 94 = STOP
+              DEFW  0x1F07         ; 95 = ELSE
+              DEFW  0x3912         ; 96 = COPY
+              DEFW  0x389D         ; 97 = COLOR
+              DEFW  0x3738         ; 98 = VERIFY
+              DEFW  0x1E03         ; 99 = DEFINT
+              DEFW  0x1E06         ; 9A = DEFSNG
+              DEFW  0x1E09         ; 9B = DEFDBL
+              DEFW  0x372E         ; 9C = CRUN
+              DEFW  0x2E63         ; 9D = MODE
+              DEFW  0x2BF5         ; 9E = SOUND
+              DEFW  0x1FAF         ; 9F = RESUME
+              DEFW  0x2AFB         ; A0 = OUT
+              DEFW  0x1F6C         ; A1 = ON
+              DEFW  0x7979         ; A2 = OPEN
+              DEFW  0x797C         ; A3 = FIELD
+              DEFW  0x797F         ; A4 = GET
+              DEFW  0x7982         ; A5 = PUT
+              DEFW  0x7985         ; A6 = CLOSE
+              DEFW  0x7988         ; A7 = LOAD
+              DEFW  0x798B         ; A8 = MERGE
+              DEFW  0x798E         ; A9 = NAME
+              DEFW  0x7991         ; AA = KILL
+              DEFW  0x7997         ; AB = LSET
+              DEFW  0x799A         ; AC = RSET
+              DEFW  0x79A0         ; AD = SAVE
+              DEFW  0x0000         ; AE = SYSTEM
+              DEFW  0x2067         ; AF = LPRINT
+              DEFW  0x795B         ; B0 = DEF
+              DEFW  0x2CB1         ; B1 = POKE
+              DEFW  0x206F         ; B2 = PRINT
+              DEFW  0x1DE4         ; B3 = CONT
+              DEFW  0x2B2E         ; B4 = LIST
+              DEFW  0x2B29         ; B5 = LLIST
+              DEFW  0x2BC6         ; B6 = DELETE
+              DEFW  0x2008         ; B7 = AUTO
+              DEFW  0x1E7A         ; B8 = CLEAR
+              DEFW  0x3656         ; B9 = CLOAD
+              DEFW  0x34A9         ; BA = CSAVE
+              DEFW  0x1B49         ; BB = NEW
+
+; The operator with the higher code has priority
+              DEFB  0x79           ; OP_PRI_PLUS
+              DEFB  0x79           ; OP_PRI_MINUS
+              DEFB  0x7C           ; OP_PRI_MUL
+              DEFB  0x7C           ; OP_PRI_DIV
+              DEFB  0x7F           ; OP_PRI_POW
+              DEFB  0x50           ; OP_PRI_AND
+              DEFB  0x46           ; OP_PRI_OR
+
+; Jump table for type adaptation
+              DEFW  0x0ADB         ; Conversion to double precision
+              DEFW  0x0000         ; unused
+              DEFW  0x0A7F         ; Conversion to integer
+              DEFW  0x0AF4         ; TYPE MISMATCH - Error if not!
+              DEFW  0x0AB1         ; Conversion to single precision
+
+; Double Precision
+              DEFW  0x0C77         ; Addition
+              DEFW  0x0C70         ; Subtraction
+              DEFW  0x0DA1         ; Multiplication
+              DEFW  0x0DE5         ; Division
+              DEFW  0x0A78         ; Power
+
+; Single Precision
+              DEFW  0x0716         ; Addition
+              DEFW  0x0713         ; Subtraction
+              DEFW  0x0847         ; Multiplication
+              DEFW  0x08A2         ; Division
+              DEFW  0x0A0C         ; Power
+
+; Integer
+              DEFW  0x0BD2         ; Addition
+              DEFW  0x0BC7         ; Subtraction
+              DEFW  0x0BF2         ; Multiplication
+              DEFW  0x2490         ; Division
+              DEFW  0x0A39         ; Power
+
+; (not used in LASER 110-310)
+              DEFB  0x4E,0x46      ; ERR_NF
+              DEFB  0x53,0x4E      ; ERR_SN
+              DEFB  0x52,0x47      ; ERR_RG
+              DEFB  0x4F,0x44      ; ERR_OD
+              DEFB  0x46,0x43      ; ERR_FC
+              DEFB  0x4F,0x56      ; ERR_OV
+              DEFB  0x4F,0x4D      ; ERR_OM
+              DEFB  0x55,0x4C      ; ERR_UL
+              DEFB  0x42,0x53      ; ERR_BS
+              DEFB  0x44,0x44      ; ERR_DD
+              DEFB  0x2F,0x30      ; ERR_D0
+              DEFB  0x49,0x44      ; ERR_ID
+              DEFB  0x54,0x4D      ; ERR_TM
+              DEFB  0x4F,0x53      ; ERR_OS
+              DEFB  0x4C,0x53      ; ERR_LS
+              DEFB  0x53,0x54      ; ERR_ST
+              DEFB  0x43,0x4E      ; ERR_CN
+              DEFB  0x4E,0x52      ; ERR_NR
+              DEFB  0x52,0x57      ; ERR_RW
+              DEFB  0x55,0x45      ; ERR_UE
+              DEFB  0x4D,0x4F      ; ERR_MO
+              DEFB  0x46,0x44      ; ERR_FD
+              DEFB  0x4C,0x33      ; ERR_L3
+
+; Data and subroutines that are transferred to RAM during BASIC initialization.
+FDIV_HELPER_ROM:
+              sub   0x00           ; Subtraction Z2 - Z1
+              ld    l,a            ; modified before each call
+              ld    a,h
+              sbc   a,0x00
+              ld    h,a
+              ld    a,b
+              sbc   a,0x00
+              ld    b,a
+              ld    a,0x00
+              ret   
+USR_START_VEC_ROM:
+              DEFW  0x1E4A         ; USR start address, pre-initialized with FUNCTION CODE -Error
+RND_MULT_ROM:
+              DEFB  0x40,0xE6,0x4D ; Multiplier for RND
+INP_HELPER_ROM:
+              in    a,(0x00)       ; Subroutine for INP: Load input port into A
+              ret   
+OUT_HELPER_ROM:
+              out   (0x00),a       ; Subroutine for OUT: Output A register over port
+              ret   
+INKEY_BUF_ROM:
+              DEFB  0x00           ; INKEY$ temporary storage
+LAST_ERR_ROM:
+              DEFB  0x00           ; last error code for ERR
+PRN_POS_ROM:
+              DEFB  0x00           ; Print head position
+OUT_FLAG_ROM:
+              DEFB  0x00           ; Output flag
+LINE_LEN_ROM:
+              DEFB  0x40           ; Line length on screen
+TAB_POS_ROM:
+              DEFB  0x30           ; last tab position on screen
+UNUSED_1916:
+              DEFB  0x00           ; unused
+STR_SPACE_ROM:
+              DEFW  0x7B4C         ; Start of string space
+CURR_LINE_ROM:
+              DEFW  0xFFFE         ; Current line number
+PROG_START_ROM:
+              DEFW  0x7AE9         ; Program text start
+
+; Texts
+MSG_ERROR_TEXT:
+              DEFM  " ERROR\00"
+; MSG_IN_TEXT: (defined in symbols.sym)
+              DEFB  0x20,0x49,0x4E,0x20,0x00
+MSG_READY_TEXT:
+              DEFB  0x52,0x45,0x41,0x44,0x59,0x0D,0x00
+MSG_BREAK_TEXT:
+              DEFB  0x42,0x52,0x45,0x41,0x4B,0x00
+
+; Subroutine for FOR/NEXT and GOSUB/RETURN
+; retrieves data back from the stack
+; STACK_RECOVERY: (defined in symbols.sym)
+              ld    hl,0x0004      ; Stack pointer + 4 into HL
+              add   hl,sp          ; (bypass 2 return addresses)
+@L2:
+              ld    a,(hl)         ; Load flag
+              inc   hl
+              cp    0x81           ; Data from FOR loop?
+              ret   nz             ; no, finished
+              ld    c,(hl)         ; yes, load loop variable address
+              inc   hl
+              ld    b,(hl)
+              inc   hl
+              push  hl             ; on stack
+              ld    l,c            ; loop variable in HL
+              ld    h,b
+              ld    a,d
+              or    e              ; loop variable specified?
+              ex    de,hl          ; no, return with address in DE
+              jr    z,@L1
+              ex    de,hl
+              rst   0x18           ; yes, = found loop variable?
+@L1:
+              ld    bc,0x000E      ; 14 in BC
+              pop   hl             ; Reload address pointer
+              ret   z              ; yes, finished
+              add   hl,bc          ; Pointer to next stack data
+              jr    @L2            ; same once more
+
+; Make space for program line to be inserted
+; or free up variable
+MAKE_SPACE:
+              call  0x196C         ; is HL still in free memory?
+              push  bc             ; no, OUT OF MEMORY - Error
+              ex    (sp),hl        ; Swap HL and BC
+              pop   bc
+@L1:
+              rst   0x18           ; Start of source block reached?
+              ld    a,(hl)         ; Relocate 1 byte
+              ld    (bc),a
+              ret   z              ; yes, finished!
+              dec   bc             ; Address pointer - 1
+              dec   hl
+              jr    @L1            ; next byte
+
+; Test if 2*C bytes are free
+; if not, OUT OF MEMORY - Error
+CHECK_FREE_MEMORY:
+              push  hl             ; HL onto stack
+              ld    hl,(STREND)    ; Starting address of free memory
+              ld    b,0x00         ; B=0
+              add   hl,bc          ; Add BC to HL twice
+              add   hl,bc
+              ld    a,0xE5         ; LD A,0E5H Dummy instruction
+              ld    a,0xC6         ; HL > FFC6H ?
+              sub   l
+              ld    l,a
+              ld    a,0xFF
+              sbc   a,h
+              jr    c,ERROR_ENTRY  ; yes, OUT OF MEMORY - Error
+              ld    h,a
+              add   hl,sp          ; HL + 4A >= SP ?
+              pop   hl             ; Restore HL
+              ret   c              ; no, return
+
+; Preparation and output of error messages
+ERROR_ENTRY:
+              ld    e,0x0C         ; Error code in E
+              jr    ERROR_HANDLER  ; to message output
+IMPLICIT_END:
+              ld    hl,(0x78A2)    ; Load line number
+              ld    a,h            ; in direct mode? (=FFFF)
+              and   l
+              inc   a
+              jr    z,@L1          ; no, jump to END
+              ld    a,(0x78F2)     ; Trap flag set?
+              or    a
+              ld    e,0x22         ; NO RESUME - Load error code
+              jr    nz,ERROR_HANDLER ; yes, to message output
+@L1:
+              jp    0x1DC1         ; Jump to END
+SYNTAX_ERR_DATA:
+              ld    hl,(DATA_LINE_NUM) ; last DATA line
+              ld    (0x78A2),hl    ; as current line number
+SYNTAX_ERR_HANDLER:
+              ld    e,0x02         ; Error code in E
+              DEFB  0x01           ; LD BC,141EH Dummy instruction
+DIV_ZERO_ERR_HANDLER:
+              ld    e,0x14         ; DIVISION BY ZERO
+              DEFB  0x01           ; LD BC,001EH Dummy instruction
+; NEXT_WITHOUT_FOR_ERR: (defined in symbols.sym)
+              ld    e,0x00         ; NEXT WITHOUT FOR
+              DEFB  0x01           ; LD BC,241EH Dummy instruction
+RESUME_WITHOUT_ERR_HANDLER:
+              ld    e,0x24         ; RESUME WITHOUT ERROR
+ERROR_HANDLER:
+              ld    hl,(0x78A2)    ; Load current line number
+              ld    (0x78EA),hl    ; store as error line
+              ld    (0x78EC),hl    ; store as error line
+; ERROR_HANDLER_RESUME: (defined in symbols.sym)
+              ld    bc,0x19B4      ; Load resume address
+              ld    hl,(0x78E8)    ; Load current program pointer
+              jp    0x1B9A         ; Jump to NEW, initialize stack
+              pop   bc             ; Fix stack
+              ld    a,e            ; Error code in A and C
+              ld    c,e
+              ld    (0x789A),a     ; store
+              ld    hl,(0x78E6)    ; Load program pointer
+              ld    (0x78EE),hl    ; store as error pointer
+              ex    de,hl          ; and into DE
+              ld    hl,(0x78EA)    ; Line number = FFFF ?
+              ld    a,h            ; (= Direct mode)
+              and   l
+              inc   a
+              jr    z,@L1          ; yes, no interruption parameters
+              ld    (0x78F5),hl    ; store error line number for CONT
+              ex    de,hl          ; and in DE
+              ld    (0x78F7),hl    ; store as CONT pointer
+@L1:
+              ld    hl,(0x78F0)    ; Address of an error routine (ON ERROR)
+              ld    a,h            ; 0?
+              or    l
+              ex    de,hl          ; into DE
+              ld    hl,0x78F2      ; Load trap flag address
+              jr    z,@L2          ; no error routine (TRAP)
+              and   (hl)           ; still open error trap
+              jr    nz,@L2         ; yes, do not perform error handling
+              dec   (hl)           ; Set trap flag
+              ex    de,hl          ; Address of error routine in HL
+              jp    0x1D36         ; Continue program there
+@L2:
+              xor   a              ; Clear trap flag
+              ld    (hl),a         ; store
+              ld    e,c            ; Error code back in E
+              call  PRINT_BOL_CHECK ; if required, output CR
+              ld    hl,ERROR_MSG_TABLE ; Address of error messages
+              call  0x79A6         ; RAM expansion output
+              ld    d,a            ; D = 0
+              ld    a,0x3F         ; output '?'
+              call  CHAR_OUTPUT_DISPATCH ; output error message
+              call  ERROR_MSG_OUTPUT ; output error message
+              nop                  ; 6 x NOP
+              nop   
+              nop   
+              nop   
+              nop   
+              nop   
+; ERROR_PRINT: (defined in symbols.sym)
+              ld    hl,MSG_ERROR_TEXT ; Address 'ERROR' text
+              push  hl             ; and onto stack
+              ld    hl,(0x78EA)    ; Load error line number
+              ex    (sp),hl        ; swap with text address on stack
+              call  OUTSTR         ; output 'ERROR'
+              pop   hl             ; error line number from stack
+              ld    de,0xFFFE      ; = 65535? (FFFF)
+              rst   0x18
+              jp    z,BASIC_INIT_1 ; yes, new system initialization
+              ld    a,h            ; = 65535? (FFFF)
+              and   l              ; (= direct mode)
+              inc   a
+              call  nz,INPRT       ; no, output 'IN Line'
+              DEFB  0x3E           ; LD A,0C1H dummy instruction
+
+; BASIC - Main Loop
+; Jump entry at either 1A18 or 1A19
+; MAIN_LOOP_ENTRY: (defined in symbols.sym)
+              pop   bc             ; Correct stack
+; MAIN_LOOP: (defined in symbols.sym)
+              call  OUTPUT_SCREEN_SELECT ; Output flag to screen, CR to printer if necessary
+              call  0x79AC         ; RAM expansion output
+              nop   
+              nop   
+              nop   
+              call  PRINT_BOL_CHECK ; CR on screen, if necessary
+              ld    hl,MSG_READY_TEXT ; Address 'READY' text
+              call  OUTSTR         ; and output
+              ld    a,(0x789A)     ; no significance
+              sub   0x02           ; no significance
+              nop   
+              nop   
+              nop   
+; MAIN_LOOP_READY: (defined in symbols.sym)
+              ld    hl,0xFFFF      ; Set current line number to FFFF
+              ld    (0x78A2),hl
+              ld    a,(0x78E1)     ; AUTO function enabled?
+              or    a
+              jr    z,NORMAL_INPUT ; no, normal input
+
+; Program input under AUTO function
+; AUTO_COMMAND: (defined in symbols.sym)
+              ld    hl,(0x78E2)    ; load next AUTO line number
+              push  hl             ; and onto stack
+              call  LINPRT         ; output line number
+              ld    a,0x20         ; then a space
+              call  CHAR_OUTPUT_DISPATCH ; and output
+              pop   de             ; line number in DE
+              push  de             ; and back on stack
+              call  FNDLIN         ; search for line in program text
+              call  c,AUTO_LINE_OUT ; exists! output line
+              nop   
+              call  RDLINE         ; read line from keyboard
+              pop   de             ; load AUTO line number
+              jr    nc,@L3         ; no BREAK, continue normally
+@L4:
+              xor   a              ; clear AUTO flag
+              ld    (0x78E1),a
+              jr    MAIN_LOOP      ; back to main loop
+@L3:
+              ld    hl,(0x78E4)    ; load AUTO increment
+              add   hl,de          ; add to AUTO line number
+              jr    c,@L4          ; overflow, leave AUTO mode
+              push  de             ; AUTO line number on stack
+              ld    de,0xFFF9      ; new AUTO line number > 65528?
+              rst   0x18           ; Compare HL/DE
+              pop   de             ; load AUTO line number again
+              jr    nc,@L4         ; > 65528! leave AUTO mode
+              ld    (0x78E2),hl    ; remember new AUTO line number
+              DEFB  0x00,0x00
+              ld    hl,0x79E7      ; address I/O buffer - 1
+              jp    0x1A81         ; analyze line and accept
+
+; Normal program input without AUTO
+; NORMAL_INPUT: (defined in symbols.sym)
+              DEFB  0x00,0x00
+              call  RDLINE         ; read line from keyboard
+              jp    c,MAIN_LOOP_READY ; BREAK! to main loop start
+              rst   0x10           ; search for first character <> ' '
+              inc   a              ; line end (00)?
+              dec   a
+              jp    z,MAIN_LOOP_READY ; yes, to main loop start
+              push  af             ; save flag (Cy=1 if digit)
+              call  DECZ           ; decode line number
+@L5:
+              dec   hl             ; buffer address back (after line number)
+              ld    a,(hl)         ; load character
+              cp    0x20           ; = space?
+              jr    z,@L5          ; yes, further back
+              inc   hl             ; buffer pointer to first char after line number
+              ld    a,(hl)         ; load character
+              cp    0x20           ; = space?
+              call  z,INXHRT       ; yes, skip first space
+              push  de             ; line number on stack
+              call  STOKEN         ; generate intermediate code
+              pop   de
+              pop   af
+              ld    (0x78E6),hl    ; save current program pointer
+              call  0x79B2         ; RAM expansion output
+              jp    nc,EXEC        ; execute direct command
+              push  de             ; line number on stack
+              push  bc             ; line length on stack
+              xor   a              ; clear RESUME/RETURN flag
+              ld    (0x78DD),a     ; clear flag
+              rst   0x10           ; line empty?
+              or    a              ; yes, zero flag = 1
+              push  af             ; save flag on stack
+              ex    de,hl          ; nostalgia from TRS-80 editor
+              ld    (0x78EC),hl    ; save line address in HL
+              ex    de,hl
+              call  FNDLIN         ; search for line in program text
+              push  bc             ; save address pointer on stack
+              call  c,DELLIN       ; if found, delete
+              pop   de             ; line address in DE
+              pop   af             ; load flags again
+              push  de             ; line address back on stack
+              jr    z,@L6          ; at empty line back to start
+              pop   de             ; load line address again
+              ld    hl,(0x78F9)    ; load program end address
+              ex    (sp),hl        ; swap with line length on stack
+              pop   bc             ; program end address in BC
+              add   hl,bc          ; end address + line length
+              push  hl             ; = new end address, save on stack
+              call  MAKE_SPACE     ; make space for new line
+              pop   hl             ; load new program address
+              ld    (0x78F9),hl    ; and save
+              ex    de,hl          ; line address in HL
+              ld    (hl),h         ; enter any line pointer
+              pop   de             ; load line number again
+              push  hl             ; line address on stack
+              inc   hl             ; line pointer on line number field
+              inc   hl
+              ld    (hl),e         ; enter line number into line
+              inc   hl
+              ld    (hl),d
+              inc   hl             ; line pointer to first text byte
+              ex    de,hl
+              ld    hl,(IO_BUF_PTR) ; I/O buffer start address
+              ex    de,hl          ; in DE
+              dec   de             ; - 2 = start of intermediate code
+              dec   de
+@L7:
+              ld    a,(de)         ; transfer intermediate code to program text
+              ld    (hl),a         ; transfer
+              inc   hl             ; address pointer + 1
+              inc   de
+              or    a              ; line end? (00)
+              jr    nz,@L7         ; no, transfer next byte
+@L6:
+              pop   de             ; load line start address
+              call  RENEW_LINE_PTRS ; from line address, renew line pointer
+              call  0x79B5         ; RAM expansion output
+              call  VRESET         ; Clear variable table and other program data
+              call  0x79B8         ; RAM expansion output
+              jp    MAIN_LOOP_READY ; to main loop start
+
+; Renew line pointers in entire program text
+; RENEW_LINE_PTRS_ALL: (defined in symbols.sym)
+              ld    hl,(PRGEND)    ; program text start in DE
+              ex    de,hl
+
+; Renew line pointers partially
+; RENEW_LINE_PTRS: (defined in symbols.sym)
+              ld    h,d            ; line start address in HL
+              ld    l,e
+              ld    a,(hl)         ; line pointer = 0?
+              inc   hl             ; (program end?)
+              or    (hl)
+              ret   z              ; yes, done
+              inc   hl             ; Skip pointer and line number
+              inc   hl
+              inc   hl
+              xor   a
+@L8:
+              cp    (hl)
+              inc   hl
+              jr    nz,@L8         ; no line end, back
+              ex    de,hl          ; line start address in HL
+              ld    (hl),e         ; Address of next line as line pointer
+              inc   hl             ; store it
+              ld    (hl),d
+              jr    RENEW_LINE_PTRS ; next line
+
+; Analyze arguments for LIST command
+; LIST_ARGS: (defined in symbols.sym)
+              ld    de,START       ; set 1st line number = 0
+              push  de             ; and on stack
+              jr    z,@L9          ; no arguments, continue
+              pop   de             ; remove 0 from stack
+              call  VAL            ; decode 1st line number
+              push  de             ; and pack on stack
+              jr    z,@L10         ; no more characters! set 2nd line number = 1st
+              rst   8              ; follows a '-' ?
+              DEFB  0xCE           ; Token for '-'
+@L9:
+              ld    de,0xFFFA      ; set 2nd line number = 65530
+              call  nz,VAL         ; more characters? yes, decode 2nd line number
+              jp    nz,SYNTAX_ERR_HANDLER ; even more characters? yes, SYNTAX ERROR
+@L10:
+              ex    de,hl          ; 2nd line number in HL
+              pop   de             ; 1st line number in DE
+              ex    (sp),hl        ; 2nd line number on stack with swap return address.
+              push  hl             ; return address back on stack
+
+; Search for line in program text
+; FNDLIN: (defined in symbols.sym)
+              ld    hl,(PRGEND)    ; load program start address
+@L11:
+              ld    b,h            ; line address in BC
+              ld    c,l
+              ld    a,(hl)         ; program end ?
+              inc   hl             ; (line pointer = 0000)
+              or    (hl)
+              dec   hl
+              ret   z              ; yes, done!
+              inc   hl             ; program pointer to line number
+              inc   hl
+              ld    a,(hl)         ; load line number into HL
+              inc   hl
+              ld    h,(hl)
+              ld    l,a
+              rst   0x18           ; Compare HL/DE = searched line ?
+              ld    h,b            ; load line start address
+              ld    l,c
+              ld    a,(hl)         ; load line pointer
+              inc   hl
+              ld    h,(hl)
+              ld    l,a
+              ccf                  ; invert carry flag
+              ret   z              ; searched line? yes-done
+              ccf                  ; carry flag back again
+              ret   nc             ; line number > searched line
+              jr    @L11           ; examine next line
+
+; NEW command
+; Reset all variables and pointers
+; (the string area definition is preserved)
+; CMD_NEW: (defined in symbols.sym)
+              ret   nz             ; Parameter? yes-SYNTAX ERROR
+              call  CLRSCR         ; clear screen
+              ld    hl,(PRGEND)    ; program text start in HL
+              call  TROFF          ; call TROFF
+              ld    (0x78E1),a     ; delete AUTO mode
+              ld    (hl),a         ; line pointer = 0000 at program text start (delete program)
+              inc   hl
+              ld    (hl),a
+              inc   hl             ; pointer behind 0000
+              ld    (0x78F9),hl    ; save as program end address
+; VRESET: (defined in symbols.sym)
+              ld    hl,(PRGEND)    ; load program start address
+              dec   hl             ; - 1
+              ld    (0x78DF),hl    ; as pointer for program continuation
+              ld    b,0x1A         ; counter = 26
+              ld    hl,0x7901      ; table start address
+@L12:
+              ld    (hl),0x04      ; enter code for single precision
+              inc   hl             ; next byte
+              djnz  @L12           ; counter - 1. done ?
+              xor   a              ; yes, clear TRAP flag
+              ld    (0x78F2),a
+              ld    l,a            ; HL = 0
+              ld    h,a
+              ld    (0x78F0),hl    ; address of an error routine = 0
+              ld    (0x78F7),hl    ; CONT address pointer = 0
+              ld    hl,(MEMSIZ)    ; load BASIC-RAM end address
+              ld    (FRETOP),hl    ; store as string area pointer; deletes all string variables
+              call  RESTORE        ; call RESTORE
+              ld    hl,(0x78F9)    ; load program end address
+              ld    (ARYTAB),hl    ; = end address of variable table
+              ld    (STREND),hl    ; = end address of matrix table
+              call  0x79BB         ; RAM expansion output
+              pop   bc             ; load return address
+              ld    hl,(STKTOP)    ; address of string area
+              dec   hl             ; - 2
+              dec   hl
+              ld    (0x78E8),hl    ; store as stack start address
+              inc   hl             ; + 2
+              inc   hl
+              ld    sp,hl          ; transfer to stack pointer
+              ld    hl,TEMPST      ; clear string buffer
+              ld    (TEMPPT),hl    ; (start address in pointer)
+              call  OUTPUT_SCREEN_SELECT ; output flag to screen, CR on printer if necessary.
+              call  PRINT_FINAL    ; end check
+              xor   a              ; A = 0
+              ld    h,a            ; HL = 0
+              ld    l,a
+              ld    (0x78DC),a     ; release indexing lock
+              push  hl             ; 0 on stack as end identifier
+              push  bc             ; return addr. back on stack
+              ld    hl,(0x78DF)    ; pointer for program continuation
+              ret   
+
+; Output question mark and read a line
+; PROMPT: (defined in symbols.sym)
+              ld    a,0x3F         ; output question mark
+              call  CHAR_OUTPUT_DISPATCH
+              ld    a,0x20         ; output space
+              call  CHAR_OUTPUT_DISPATCH
+              jp    0x053A         ; read a line
+
+; Analyze line and generate intermediate code (tokenize)
+; STOKEN: (defined in symbols.sym)
+              xor   a              ; clear DATA flag
+              ld    (0x78B0),a
+              ld    c,a            ; character counter = 0
+              ex    de,hl
+              ld    hl,(IO_BUF_PTR) ; address of I/O buffer
+              dec   hl             ; - 2
+              dec   hl
+              ex    de,hl          ; in DE
+              ld    a,(hl)         ; load character from text line
+              cp    0x20           ; = space ?
+              jp    z,0x1C5B       ; yes! transfer directly
+              ld    b,a            ; character in B (as separator)
+              cp    0x22           ; = double quote ?
+              jp    z,0x1C77       ; yes! transfer string
+              or    a              ; line end ?
+              jp    z,0x1C7D       ; yes! done
+              ld    a,(0x78B0)     ; load DATA flag
+              or    a              ; set ?
+              ld    a,(hl)         ; load character
+              jp    nz,0x1C5B      ; yes! transfer directly
+              cp    0x3F           ; = question mark ?
+              ld    a,0xB2         ; load PRINT token
+              jp    z,0x1C5B       ; yes! transfer to intermediate code
+              ld    a,(hl)         ; load character again
+              cp    0x30           ; character < '0' ?
+              jr    c,CRUNCH       ; yes, check for keywords
+              cp    0x3C           ; character < '<' ?
+              jp    c,0x1C5B       ; yes, accept directly
+
+; Check text for valid BASIC keyword
+; CRUNCH: (defined in symbols.sym)
+              push  de             ; intermediate code pointer on stack
+              ld    de,0x164F      ; start address of keywords
+              push  bc             ; character counter on stack
+              ld    bc,NOTRES      ; set return address
+              push  bc
+              ld    b,0x7F         ; set token counter = 7F
+              ld    a,(hl)         ; load character from text
+              cp    0x61           ; lowercase?
+              jr    c,@L13         ; no!
+              cp    0x7B
+              jr    nc,@L13        ; no!
+              and   0x5F           ; convert to uppercase
+              ld    (hl),a         ; write character back to text
+@L13:
+              ld    c,(hl)         ; load 1st character
+              ex    de,hl          ; keyword pointer in HL
+@L14:
+              inc   hl             ; search for next keyword
+              or    (hl)           ; start of a keyword?
+              jp    p,0x1C0E       ; no, continue
+              inc   b              ; token counter + 1
+              ld    a,(hl)         ; 1st character of keyword
+              and   0x7F           ; clear bit 7
+              ret   z              ; end of keyword table
+              cp    c              ; = text character ?
+              jr    nz,@L14        ; no, next keyword
+              ex    de,hl          ; swap address pointers
+              push  hl             ; buffer pointer on stack
+@L17:
+              inc   de             ; keyword pointer + 1
+              ld    a,(de)         ; next char of keyword
+              or    a              ; new keyword ?
+              jp    m,0x1C39       ; yes, keyword recognized
+              ld    c,a            ; character in C
+              ld    a,b            ; Token = GOTO?
+              cp    0x8D
+              jr    nz,@L15        ; no, continue
+              rst   0x10           ; yes, space allowed
+              dec   hl             ; buffer pointer back one char
+@L15:
+              inc   hl             ; buffer pointer to next character
+              ld    a,(hl)         ; load character
+              cp    0x61           ; lowercase ?
+              jr    c,@L16         ; no!
+              and   0x5F           ; convert to uppercase
+@L16:
+              cp    c              ; = letter from keyword ?
+              jr    z,@L17         ; yes, continue
+              pop   hl             ; no, buffer pointer back again
+              jr    @L13           ; try next keyword
+              ld    c,b            ; Token determined. Token in C
+              pop   af             ; clear stack
+              ex    de,hl          ; swap address pointers
+              ret   
+
+; Token or text to intermediate code
+; NOTRES: (defined in symbols.sym)
+              ex    de,hl          ; HL = buffer pointer
+              ld    a,c            ; character or token in A
+              pop   bc             ; load character counter
+              pop   de             ; load intermediate code pointer
+              ex    de,hl          ; swap address pointers
+              cp    0x95           ; = ELSE token ?
+              ld    (hl),0x3A      ; ':' to intermediate code
+              jr    nz,@L18        ; no, ignore ':'
+              inc   c              ; yes, character counter + 1
+              inc   hl             ; intermediate code pointer after ':'
+@L18:
+              cp    0xFB           ; = '\
+              jr    nz,@L19        ; no!
+              ld    (hl),0x3A      ; yes, ':' to intermediate code
+              inc   hl             ; intermediate code pointer + 1
+              ld    b,0x93         ; REM token to intermediate code
+              ld    (hl),b
+              inc   hl             ; intermediate code pointer + 1
+              ex    de,hl          ; swap address pointers
+              inc   c              ; character counter + 2
+              inc   c
+              jr    @L20           ; transfer remaining text from buffer unchanged to intermediate c
+@L19:
+              ex    de,hl          ; swap address pointers
+@L24:
+              inc   hl             ; buffer pointer + 1
+              ld    (de),a         ; token or character to intermediate code
+              inc   de             ; intermediate code pointer + 1
+              inc   c              ; character counter + 1
+              sub   0x3A           ; = ':' ?
+              jr    z,@L21         ; yes, clear DATA flag
+              cp    0x4E           ; DATA token ? (88 - 3A)
+              jr    nz,@L22        ; no!
+@L21:
+              ld    (0x78B0),a     ; yes, set DATA flag
+@L22:
+              sub   0x59           ; REM token ? (93 - 3A)
+              jp    nz,0x1BCC      ; no, back
+              ld    b,a            ; 0 as separator in B
+@L25:
+              ld    a,(hl)         ; text until separator or line end unchanged in intermediate code
+              or    a              ; line end ?
+              jr    z,@L23         ; yes, done
+              cp    b              ; separator ? (with ' = \
+              jr    z,@L24         ; yes, back
+@L20:
+              inc   hl             ; buffer pointer + 1
+              ld    (de),a         ; character to intermediate code
+              inc   c              ; character counter + 1
+              inc   de             ; intermediate code pointer + 1
+              jr    @L25           ; next character
+@L23:
+              ld    hl,0x0005      ; HL = 5
+              ld    b,h            ; B = 0
+              add   hl,bc          ; character counter + 5
+              ld    b,h            ; in BC
+              ld    c,l
+              ld    hl,(IO_BUF_PTR) ; start address of I/O buffer - 3
+              dec   hl
+              dec   hl             ; pointer to byte before intermediate code
+              dec   hl
+              ld    (de),a         ; mark intermediate code end with 3 zeros
+              inc   de
+              ld    (de),a         ; (end identifier for direct commands)
+              inc   de
+              ld    (de),a
+              ret                  ; that's it
+
+; Restart 18
+; Compare HL and DE
+; DCOMPR: (defined in symbols.sym)
+              ld    a,h            ; MSB HL = MSB DE ?
+              sub   d
+              ret   nz             ; no, done
+              ld    a,l            ; LSB HL = LSB DE ?
+              sub   e
+              ret   
+
+; Restart 8
+; Syntax check
+; SYNCHR: (defined in symbols.sym)
+              ld    a,(hl)         ; load character from pointer position
+              ex    (sp),hl        ; swap pointer with return address
+              cp    (hl)           ; = the character following the call ?
+              inc   hl             ; return address + 1
+              ex    (sp),hl        ; swap with pointer again
+              jp    z,CHRGTR       ; equal, continue with RST 10
+              jp    SYNTAX_ERR_HANDLER ; not equal, SYNTAX ERROR
+
+; FOR statement
+; FOR: (defined in symbols.sym)
+              ld    a,0x64         ; lock indexing
+              ld    (0x78DC),a
+              call  CMD_LET        ; starting value in loop variable
+              ex    (sp),hl        ; program pointer on stack
+              call  STACK_RECOVERY ; loop with same loop variable already on stack ?
+              pop   de             ; program pointer in DE
+              jr    nz,@L26        ; no!
+              add   hl,bc          ; yes, delete all loops up to that point by stack correction
+              ld    sp,hl          ; set stack pointer new
+              ld    (0x78E8),hl    ; and save new starting value
+@L26:
+              ex    de,hl          ; program pointer in HL
+              ld    c,0x08         ; at least 16 bytes free ?
+              call  CHECK_FREE_MEMORY ; no, OUT OF MEMORY error
+              push  hl             ; program pointer on stack
+              call  CMD_DATA       ; search for next statement
+              ex    (sp),hl        ; program pointer to next statement on stack, save old pointer
+              push  hl             ; and also back on the stack
+              ld    hl,(0x78A2)    ; load line number
+              ex    (sp),hl        ; swap with pointer on stack
+              rst   8              ; follows a 'TO' token ?
+              cp    l
+              rst   0x20           ; test type of loop variable
+              jp    z,TMERR        ; String? yes, TYPE MISMATCH error
+              jp    nc,TMERR       ; double precision? yes, TYPE MISMATCH error
+              push  af             ; (FF = Integer, 01 = single precision)
+              call  0x2337         ; calculate end value expression
+              pop   af             ; load type flag
+              push  hl             ; program pointer on stack
+              jp    p,0x1CEC       ; single precision!
+              call  FRCINT         ; Integer, convert end value
+              ex    (sp),hl        ; end value on the stack
+              ld    de,0x0001      ; increment value = 1
+              ld    a,(hl)         ; load next character
+              cp    0xCC           ; = STEP token ?
+              call  z,0x2B01       ; yes, evaluate increment value and convert to integer (in DE)
+              push  de             ; increment value on the stack
+              push  hl             ; save program pointer
+              ex    de,hl          ; increment value in HL
+              call  ISIGN          ; test increment value
+              jr    @L27           ; continue at 1D0E
+              call  FRCSNG         ; convert end value to single precision
+              call  MOVRF          ; transfer to Y
+              pop   hl             ; reload program pointer
+              push  bc             ; end value on the stack
+              push  de
+              ld    bc,0x8100      ; increment value = 1 in Y
+              ld    d,c
+              ld    e,d
+              ld    a,(hl)         ; load next character
+              cp    0xCC           ; = STEP token ?
+              ld    a,0x01         ; set flag for positive increment
+              jr    nz,@L28        ; no!
+              call  0x2338         ; evaluate increment value
+              push  hl             ; program pointer on the stack
+              call  FRCSNG         ; evaluate increment value
+              call  MOVRF          ; and enter in Y
+              call  SIGN           ; test increment value (A=1 if positive, A=FF if negative)
+@L27:
+              pop   hl             ; reload program pointer
+@L28:
+              push  bc             ; increment value on stack
+              push  de             ; load program pointer
+              ld    c,a            ; increment flag in C
+              rst   0x20           ; test type of increment value
+              ld    b,a            ; (01 = single precision, FF = Integer)
+              push  bc             ; type flag and increment flag on stack
+              push  hl             ; program pointer on stack
+              ld    hl,(0x78DF)    ; address of loop variable in HL
+              ex    (sp),hl        ; swap with program pointer on stack
+              ld    b,0x81         ; FOR token (81) in B
+              push  bc             ; as marker on the stack
+              inc   sp             ; remove LSB
+
+; Program execution
+; HL must point to ':' or end of line
+; NEWSTT: (defined in symbols.sym)
+              call  KBD_QUERY_WRAP ; query keyboard
+              or    a              ; new key pressed?
+              call  nz,0x1DA0      ; yes, analyze
+              ld    (0x78E6),hl    ; save program pointer
+              ld    (0x78E8),sp    ; save stack pointer
+              ld    a,(hl)         ; load character
+              cp    0x3A           ; ':''? (multiple statements in line)
+              jr    z,EXEC         ; yes!
+              or    a              ; line end ?
+              jp    nz,SYNTAX_ERR_HANDLER ; no, SYNTAX ERROR
+              inc   hl             ; program end?
+              ld    a,(hl)         ; (line pointer = 0000)
+              inc   hl
+              or    (hl)
+              jp    z,IMPLICIT_END ; yes, implicit end
+              inc   hl             ; program pointer to line number
+              ld    e,(hl)         ; load line number in DE
+              inc   hl
+              ld    d,(hl)         ; line number in HL, program pointer in DE
+              ex    de,hl
+              ld    (0x78A2),hl    ; line number = current line number
+              ld    a,(0x791B)     ; (TRON)
+              or    a              ; no!
+              jr    z,@L29
+              push  de             ; program pointer on stack
+              ld    a,0x3C         ; '<' output
+              call  CHAR_OUTPUT_DISPATCH
+              call  LINPRT         ; line number output
+              ld    a,0x3E         ; '>' output
+              call  CHAR_OUTPUT_DISPATCH
+              pop   de             ; reload program pointer
+@L29:
+              ex    de,hl          ; program pointer in HL
+; EXEC: (defined in symbols.sym)
+              rst   0x10           ; address next character
+              ld    de,NEWSTT      ; return address on stack
+              push  de
+              ret   z              ; end of statement
+; EXEC_GOTO: (defined in symbols.sym)
+              sub   0x80           ; token ?
+              jp    c,CMD_LET      ; no, assignment without LET
+              cp    0x3C           ; statement token ?
+              jp    nc,0x2AE7      ; no!
+              rlca                 ; token * 2 in BC
+              ld    c,a
+              ld    b,0x00
+              ex    de,hl          ; program pointer in DE
+              ld    hl,0x1822      ; start of jump table
+              add   hl,bc          ; + 2*token = pointer to jump address
+              ld    c,(hl)         ; load jump address
+              inc   hl
+              ld    b,(hl)
+              push  bc             ; and onto the stack
+              ex    de,hl          ; reload program pointer in HL
+
+; Restart 10
+; Search for next character in program text
+; 09, 0A (LF) and 20 (' ') are skipped
+; CHRGTR: (defined in symbols.sym)
+              inc   hl             ; program pointer + 1
+              ld    a,(hl)         ; load character
+              cp    0x3A           ; ':''?
+              ret   nc             ; yes!
+              cp    0x20           ; space ?
+              jp    z,CHRGTR       ; yes, next character
+              cp    0x0B           ; digit ?
+              jr    nc,@L30        ; next character
+              cp    0x09           ; > 09H ? (excludes 09 and 0A)
+              jp    nc,CHRGTR      ; yes, next character
+@L30:
+              cp    0x30           ; '0' ?
+              ccf                  ; yes, Carry = 1
+              inc   a              ; line end ?
+              dec   a
+              ret                  ; done
+
+; RESTORE statement
+; Resetting the DATA pointer
+; RESTORE: (defined in symbols.sym)
+              ex    de,hl          ; program pointer in DE
+              ld    hl,(PRGEND)    ; program start address
+              dec   hl             ; - 1
+              ld    (0x78FF),hl    ; store as DATA pointer
+              ex    de,hl          ; reload program pointer
+              ret                  ; done
+
+; keyboard activity during program execution
+; or analyze during LIST
+; ISCNTC: (defined in symbols.sym)
+              call  KBD_QUERY_WRAP ; key pressed ?
+              or    a              ; no!
+              ret   z              ; no, done!
+              nop   
+              nop   
+              nop   
+              nop   
+              nop   
+              ld    (0x7899),a
+              dec   a
+              ret   nz
+              inc   a              ; A = 1 set (BREAK identifier)
+              jp    0x1DB4         ; continue at END
+
+; END - statement
+; Terminate program execution
+; END: (defined in symbols.sym)
+              ret   nz             ; following parameters? yes, error
+              push  af             ; END flag (A=0) on stack
+              call  z,0x79BB       ; RAM expansion exit
+              pop   af             ; END flag reload
+              ld    (0x78E6),hl    ; save current program pointer
+              ld    hl,TEMPST      ; clear intermediate buffer for strings.
+              ld    (TEMPPT),hl    ; (pointer to start)
+              DEFB  0x21           ; LD HL,0FFF6H Dummy instruction
+
+; Entry for BREAK in INPUT statement
+; CMD_END_INPUT: (defined in symbols.sym)
+              or    0xFF           ; END flag = FF (BREAK in INPUT)
+              pop   bc             ; remove return address from stack.
+              ld    hl,(0x78A2)    ; load current line number
+              push  hl             ; on stack
+              push  af             ; END flag on stack
+              ld    a,l            ; line number = FFFF ?
+              and   h              ; (= direct mode)
+              inc   a
+              jr    z,@L31         ; yes!
+              ld    (0x78F5),hl    ; no, save as CONT line number.
+              ld    hl,(0x78E6)    ; current program pointer
+              ld    (0x78F7),hl    ; as CONT pointer save
+@L31:
+              call  OUTPUT_SCREEN_SELECT ; output flag on screen. CR on
+              call  PRINT_BOL_CHECK ; CR on screen, if required
+              pop   af             ; reload END flag
+              ld    hl,MSG_BREAK_TEXT ; address 'BREAK' text
+              jp    nz,0x1A06      ; if not END and not direct mode, output 'BREAK IN line'
+              jp    MAIN_LOOP_ENTRY ; back to main loop
+
+; CONT - statement
+; Resume program execution after BREAK or error
+; CONT: (defined in symbols.sym)
+              ld    hl,(0x78F7)    ; load CONT program pointer
+              ld    a,h            ; = 0000 ?
+              or    l              ; (no continuation possible)
+              ld    e,0x20         ; load error code CAN'T CONTINUE
+              jp    z,ERROR_HANDLER ; yes, output error message
+              ex    de,hl          ; program pointer in DE
+              ld    hl,(0x78F5)    ; load CONT line number
+              ld    (0x78A2),hl    ; and save in current line pointer.
+              ex    de,hl          ; program pointer in HL
+              ret                  ; resume program execution
+
+; TRON - statement
+; Turn trace on
+; TRON: (defined in symbols.sym)
+              DEFB  0x3E           ; LD A,0AFH at TRON A<>0 set
+
+; TROFF - statement
+; Turn trace off
+; TROFF: (defined in symbols.sym)
+              xor   a              ; at TROFF A = 0 set
+              ld    (0x791B),a     ; save as TRACE flag
+              ret   
+              pop   af             ; not used
+              pop   hl
+              ret   
+
+; DEFSTR - statement
+; Define string variables
+; DEFSTR: (defined in symbols.sym)
+              ld    e,0x03         ; typecode = String in E
+              DEFB  0x01           ; LD BC,021EH Dummy instruction
+
+; DEFINT - statement
+; Define integer variables
+; DEFINT: (defined in symbols.sym)
+              ld    e,0x02         ; typecode = Integer in E
+              DEFB  0x01           ; LD BC,041EH Dummy instruction
+
+; DEFSNG - statement
+; Define single precision variables
+; DEFSNG: (defined in symbols.sym)
+              ld    e,0x04         ; typecode = single precision in E
+              DEFB  0x01           ; LD BC,081EH Dummy instruction
+
+; DEFDBL - statement
+; Define double precision variables
+; DEFDBL: (defined in symbols.sym)
+              ld    e,0x08         ; typecode = double precision in E
+
+; common routine
+@L34:
+              call  ISLET          ; next character = letter?
+              ld    bc,SYNTAX_ERR_HANDLER ; address SN error routine
+              push  bc             ; and on stack
+              ret   c              ; no letter, output SYNTAX ERROR.
+              sub   0x41           ; determine position in alphabet
+              ld    c,a            ; transfer to B and C
+              ld    b,a
+              rst   0x10           ; load next character
+              cp    0xCE           ; = '-' token
+              jr    nz,@L32        ; no!
+              rst   0x10           ; load next character
+              call  ISLET          ; = letter ?
+              ret   c              ; no, output SYNTAX ERROR
+              sub   0x41           ; determine position in alphabet
+              ld    b,a            ; as high value in B
+              rst   0x10           ; load next character
+@L32:
+              ld    a,b            ; 2nd letter < 1st letter ?
+              sub   c
+              ret   c              ; yes, output SYNTAX ERROR
+              inc   a              ; difference + 1 = counter
+              ex    (sp),hl        ; program pointer on stack
+              ld    hl,0x7901      ; address typecode table
+              ld    b,0x00         ; offset for 1st letter in BC
+              add   hl,bc          ; table start = 1st letter in tab.
+@L33:
+              ld    (hl),e         ; enter typecode in table
+              inc   hl             ; table address + 1
+              dec   a              ; counter - 1
+              jr    nz,@L33        ; done? no - next letter
+              pop   hl             ; reload program pointer
+              ld    a,(hl)         ; load character from program text
+              cp    0x2C           ; follow more parameters ?
+              ret   nz             ; no, done
+              rst   0x10           ; load next character
+              jr    @L34           ; enter more definitions
+
+; Tests if character is a letter
+; ISLET: (defined in symbols.sym)
+              ld    a,(hl)         ; load character
+              cp    0x41           ; < A ?
+              ret   c              ; yes, no letter
+              cp    0x5B           ; <= Z yes, Carry = 1
+              ccf                  ; invert carry
+              ret   
+
+; Evaluate expression and determine integer value < 32768.
+; GETVAL: (defined in symbols.sym)
+              rst   0x10           ; address next character
+              call  0x2B02         ; evaluate expression
+              ret   p              ; > 32767 ? no, done
+
+; FUNCTION CODE - Error
+              ld    e,0x08         ; error code in E
+              jp    ERROR_HANDLER  ; output error message
+
+; Convert string to number ( < 65530 )
+; VAL: (defined in symbols.sym)
+              ld    a,(hl)         ; load character from string
+              cp    0x2E           ; = '.' ?
+              ex    de,hl          ; string pointer in DE
+              ld    hl,(0x78EC)    ; '.'-line number in HL
+              ex    de,hl          ; swap string and '.'-ZNr
+              jp    z,CHRGTR       ; yes, done
+; DECZ: (defined in symbols.sym)
+              dec   hl             ; string pointer - 1
+              ld    de,START       ; value = 0 set
+@L35:
+              rst   0x10           ; load next character
+              ret   nc             ; no digit, done
+              push  hl             ; string pointer on stack
+              push  af             ; digit on stack
+              ld    hl,0x1998      ; value > 1998H ?
+              rst   0x18           ; (i.e. value*10 > 65529)
+              jp    c,SYNTAX_ERR_HANDLER ; yes, SYNTAX ERROR
+              ld    h,d            ; transfer value in HL
+              ld    l,e
+              add   hl,de          ; value * 2
+              add   hl,hl          ; * 4
+              add   hl,de          ; * 5
+              add   hl,hl          ; * 10
+              pop   af             ; reload digit
+              sub   0x30           ; remove zone part
+              ld    e,a            ; in DE transfer
+              ld    d,0x00
+              add   hl,de          ; add to 10*value
+              ex    de,hl          ; transfer value in DE
+              pop   hl             ; pop string pointer
+              jr    @L35           ; next digit
+
+; CLEAR - statement
+; Clear variables and define string area
+; CLEAR: (defined in symbols.sym)
+              jp    z,0x1B61       ; no parameters? Jump to NEW
+              call  0x1E46         ; evaluate expression
+              dec   hl             ; program pointer - 1
+              rst   0x10           ; address next character
+              ret   nz             ; command end?
+              push  hl             ; program pointer on stack
+              ld    hl,(MEMSIZ)    ; BASIC-RAM end address loaded
+              ld    a,l            ; - argument of CLEAR statement
+              sub   e              ; = start of string area - 1
+              ld    e,a
+              ld    a,h
+              sbc   a,d
+              ld    d,a
+              jp    c,ERROR_ENTRY  ; underflow, OUT OF MEMORY - error
+              ld    hl,(0x78F9)    ; start of variable table
+              ld    bc,RST28_VEC   ; + 64
+              add   hl,bc
+              rst   0x18           ; < new string area address - 1?
+              jp    nc,ERROR_ENTRY ; no, OUT OF MEMORY - error
+              ex    de,hl          ; new string area start - 1
+              ld    (STKTOP),hl    ; save
+              pop   hl             ; reload program pointer
+              jp    0x1B61         ; continue at NEW
+
+; RUN statement
+; Start program
+; RUN: (defined in symbols.sym)
+              jp    z,VRESET       ; no line number? continue at NEW
+              call  0x79C7         ; RAM expansion exit
+              call  0x1B61         ; clear variables
+              ld    bc,NEWSTT      ; load return address
+              jr    @L36           ; continue at GOTO
+
+; GOSUB statement
+; Call subroutine
+; GOSUB: (defined in symbols.sym)
+              ld    c,0x03         ; check if 6 bytes are free
+              call  CHECK_FREE_MEMORY
+              pop   bc             ; remove return address
+              push  hl             ; HL on the stack
+              push  hl             ; program pointer again on stack
+              ld    hl,(0x78A2)    ; with current line number
+              ex    (sp),hl        ; swap
+              ld    a,0x91         ; 91 as flag for GOSUB
+              push  af             ; on the stack
+              inc   sp             ; remove LSB
+@L36:
+              push  bc             ; return address back on stack
+
+; GOTO - statement
+; unconditional jump
+; GOTO: (defined in symbols.sym)
+              call  DECZ           ; determine jump line number
+; GOTO_CONTINUE: (defined in symbols.sym)
+              call  CMD_ELSE       ; search for end of statement
+              push  hl             ; program pointer on stack
+              ld    hl,(0x78A2)    ; current line number in HL
+              rst   0x18           ; jump to < line number ?
+              pop   hl             ; load program pointer
+              inc   hl             ; on next line
+              call  c,0x1B2F       ; yes, search jump line from this line
+              call  nc,FNDLIN      ; no, search jump line from program start
+              ld    h,b            ; address of jump line in HL
+              ld    l,c
+              dec   hl             ; program pointer before jump line
+              ret   c              ; line present? yes, continue there
+
+; UNDEFINED STATEMENT - Error
+; ERR_UNDEFINED_STATEMENT: (defined in symbols.sym)
+              ld    e,0x0E         ; Error code in E
+              jp    ERROR_HANDLER  ; Display error message
+
+; RETURN Statement
+; CMD_RETURN: (defined in symbols.sym)
+              ret   nz             ; Parameter? yes, error
+              ld    d,0xFF         ; Get data back from stack
+              call  STACK_RECOVERY ; (skip FOR data)
+              ld    sp,hl          ; Reinitialize stack
+              ld    (0x78E8),hl
+              cp    0x91           ; Data from a GOSUB call?
+              ld    e,0x04         ; Code for RETURN WITHOUT GOSUB error
+              jp    nz,ERROR_HANDLER ; no, display error message
+              pop   hl             ; Load line number from stack
+              ld    (0x78A2),hl    ; store as current line number
+              inc   hl             ; Direct mode?
+              ld    a,h
+              or    l
+              jr    nz,@L37        ; no!
+              ld    a,(0x78DD)     ; RESUME/RETURN flag set?
+              or    a
+              jp    nz,MAIN_LOOP_ENTRY ; yes, back to main loop
+@L37:
+              ld    hl,NEWSTT      ; Load program pointer
+              ex    (sp),hl        ; Swap with program pointer
+              DEFB  0x3E           ; LD A, 0E1H dummy instruction
+; CMD_DATA_SKIP: (defined in symbols.sym)
+              pop   hl             ; Load program pointer
+
+; DATA Statement
+; CMD_DATA: (defined in symbols.sym)
+              DEFB  0x01,0x3A      ; Delimiter 1 = ':' in C
+
+; ELSE Statement
+; CMD_ELSE: (defined in symbols.sym)
+              ld    c,0x00         ; Delimiter 1 = 00 in C
+              ld    b,0x00         ; Delimiter 2 = 00 in B
+ELSE_SWAP:
+              ld    a,c            ; Swap delimiter 1 and 2
+              ld    c,b
+              ld    b,a
+ELSE_LOOP:
+              ld    a,(hl)         ; Load character
+              or    a              ; = end of line?
+              ret   z              ; yes, done
+              cp    b              ; = delimiter 2?
+              ret   z              ; yes, done
+              inc   hl             ; Program pointer + 1
+              cp    0x22           ; = opening quote?
+              jr    z,ELSE_SWAP    ; yes, swap delimiters
+              sub   0x8F           ; IF token?
+              jr    nz,ELSE_LOOP   ; no, continue
+              cp    b              ; if not in string or after
+              adc   a,d            ; nesting counter + 1
+              ld    d,a
+              jr    ELSE_LOOP
+
+; LET Statement
+; CMD_LET: (defined in symbols.sym)
+              call  VARPTR_FIND_OR_CREATE ; Search for variable in table
+              rst   8              ; Followed by '=' character?
+              DEFB  0xD5
+              ex    de,hl          ; Address of variable table
+              ld    (0x78DF),hl    ; remember for variable
+              ex    de,hl
+              push  de             ; and pack on the stack
+              rst   0x20           ; Test type
+              push  af             ; Type flag on stack
+              call  0x2337         ; Evaluate expression
+              pop   af             ; Load type flag
+              ex    (sp),hl        ; Program pointer on stack
+; LET_VAR_PTR_LOAD: (defined in symbols.sym)
+              add   a,0x03         ; Calculate type code
+              call  CONVRT         ; Convert result of expression to
+              call  VDFACS         ; X address in DE
+              push  hl             ; Addr. of variable table on stack
+              jr    nz,LET_EXIT    ; Jump if not string
+LET_STRING:
+              ld    hl,(FACLO)     ; Load string pointer from X reg
+              push  hl             ; and on stack
+              inc   hl             ; Load string address
+              ld    e,(hl)         ; in DE
+              inc   hl
+              ld    d,(hl)
+              ld    hl,(PRGEND)    ; String not in program text or
+              rst   0x18
+              jr    nc,LET_STRING_MOVE ; yes, string in string space
+              ld    hl,(STKTOP)    ; String in program text?
+              rst   0x18
+              pop   de             ; Load string pointer
+              jr    nc,LET_STRING_EXIT ; yes, string not in string space!
+              ld    hl,(0x78F9)    ; does string pointer point to var. tab.?
+              rst   0x18
+              jr    nc,LET_STRING_EXIT ; no, string not in string space.
+              DEFB  0x3E           ; LD A, 0D1H dummy instruction
+LET_STRING_MOVE:
+              pop   de             ; Load string pointer
+              call  REM_STR_TMP_ENTRY ; Delete string in intermediate storage
+              ex    de,hl          ; String pointer in HL
+              call  0x2843         ; Transfer string to string space
+LET_STRING_EXIT:
+              call  REM_STR_TMP_ENTRY ; Delete string in intermediate storage
+              ex    (sp),hl
+LET_EXIT:
+              call  VMOVE          ; Value of X in variable table
+              pop   de             ; clean up stack
+              pop   hl             ; Load program pointer
+              ret   
+
+; ON Statement
+; CMD_ON: (defined in symbols.sym)
+              cp    0x9E           ; followed by an ERROR token?
+              jr    nz,ON_GOTO_GOSUB ; no!
+ON_ERROR:
+              rst   0x10           ; address next character
+              rst   8              ; is it a GOTO token?
+              DEFB  0x8D
+              call  DECZ           ; Decode line number
+              ld    a,d            ; = 0?
+              or    e              ; (turn off error handling)
+              jr    z,ON_ERROR_SET ; yes!
+              call  0x1B2A         ; Search for line in program text
+              ld    d,b            ; Line address in DE
+              ld    e,c
+              pop   hl             ; Load program pointer
+              jp    nc,ERR_UNDEFINED_STATEMENT ; Line not present!
+ON_ERROR_SET:
+              ex    de,hl          ; Address of error routine
+              ld    (0x78F0),hl    ; store
+              ex    de,hl
+              ret   c              ; Line number > 0, done!
+ON_ERROR_CHECK:
+              ld    a,(0x78F2)     ; already an error occurred?
+              or    a              ; and test
+              ret   z              ; no, done
+              ld    a,(0x789A)     ; Error code in E
+              ld    e,a
+              jp    ERROR_HANDLER_RESUME ; to error handling
+ON_GOTO_GOSUB:
+              call  GETBYT         ; Evaluate expression, integer
+              ld    a,(hl)         ; Load character from program text
+              ld    b,a            ; in B
+              cp    0x91           ; = GOSUB token?
+              jr    z,@L1          ; yes!
+              rst   8              ; is it a GOTO token?
+              DEFB  0x8D
+              dec   hl             ; Program pointer - 1
+@L1:
+              ld    c,e            ; jump variable in C
+ON_LOOP:
+              dec   c              ; variable - 1 = 0?
+              ld    a,b            ; Token in A for jump execution
+              jp    z,EXEC_GOTO    ; yes, execute jump with n-th line number
+              call  0x1E5B         ; Decode line number
+              cp    0x2C           ; followed by a comma?
+              ret   nz             ; no, continue program with the next
+              jr    ON_LOOP        ; next line number
+
+; RESUME Statement
+; CMD_RESUME: (defined in symbols.sym)
+              ld    de,0x78F2      ; Address TRAP flag
+              ld    a,(de)         ; Error occurred?
+              or    a
+              jp    z,RESUME_WITHOUT_ERR_HANDLER ; no, RESUME WITHOUT ERROR
+              inc   a              ; A = 0
+              ld    (0x789A),a     ; Clear error code
+              ld    (de),a         ; Clear TRAP flag
+              ld    a,(hl)         ; Load character
+              cp    0x87           ; = NEXT token?
+              jr    z,RESUME_NEXT  ; yes! RESUME NEXT
+              call  DECZ           ; Decode line number
+              ret   nz             ; more characters? yes-error
+              ld    a,d            ; line number = 0?
+              or    e
+              jp    nz,GOTO_CONTINUE ; no, continue at GOTO
+              inc   a              ; A = 1
+              jr    $+4
+RESUME_NEXT:
+              rst   0x10           ; next character in program text
+              ret   nz             ; not end of line, error
+              ld    hl,(0x78EE)    ; pointer to faulty line
+              ex    de,hl          ; in DE
+              ld    hl,(0x78EA)    ; load error line number
+              ld    (0x78A2),hl    ; as current line number entry
+              ex    de,hl          ; pointer back in HL
+              ret   nz             ; RESUME 0? yes-done
+              ld    a,(hl)         ; end of line?
+              or    a
+              jr    nz,@L1         ; no, next statement in line
+              inc   hl             ; program pointer to 1. statement
+              inc   hl             ; of the next line
+              inc   hl             ; (behind pointer and line number)
+              inc   hl
+@L1:
+              inc   hl
+              ld    a,d            ; direct mode?
+              and   e              ; (line number = FFFF)
+              inc   a
+              jp    nz,CMD_DATA    ; no, next statement, done
+              ld    a,(0x78DD)     ; RETURN/RESUME flag set?
+              dec   a
+              jp    z,CMD_END_INPUT ; ja, terminate program execution.
+              jp    CMD_DATA       ; search next statement, done
+
+; ERROR Statement
+; CMD_ERROR: (defined in symbols.sym)
+              call  GETBYT         ; analyze error code
+              ret   nz             ; more characters? yes-error
+              or    a              ; error code = 0?
+              jp    z,0x1E4A       ; yes, FUNCTION CODE - Error
+              dec   a              ; determine internal error code
+              add   a,a
+              ld    e,a            ; and store in E
+              cp    0x2D           ; < 2D ?
+              jr    c,@L2          ; yes!
+
+; UNPRINTABLE ERROR
+; ERROR_UNPRINTABLE: (defined in symbols.sym)
+              ld    e,0x26         ; error code in E
+@L2:
+              jp    ERROR_HANDLER  ; to error routine
+
+; AUTO Statement
+; CMD_AUTO: (defined in symbols.sym)
+              ld    de,0x000A      ; starting and increment value = 10
+              push  de             ; on stack
+              jr    z,@L3          ; no further characters entered!
+              call  VAL            ; decode starting value
+              ex    de,hl          ; starting value in HL, program pointer DE
+              ex    (sp),hl        ; starting value on stack
+              jr    z,@L4          ; no further characters entered!
+              ex    de,hl          ; program pointer in HL
+              rst   8              ; follows a comma?
+              DEFB  0x2C
+              ex    de,hl          ; program pointer again in DE
+              ld    hl,(0x78E4)    ; load old increment value
+              ex    de,hl          ; program pointer in HL
+              jr    z,@L3          ; no further characters after comma!
+              call  DECZ           ; decode increment value
+              jp    nz,SYNTAX_ERR_HANDLER ; end of line? no-SYNTAX ERROR
+@L3:
+              ex    de,hl          ; increment value in HL
+@L4:
+              ld    a,h            ; = 0 ?
+              or    l
+              jp    z,0x1E4A       ; yes, FUNCTION CODE - Error
+              ld    (0x78E4),hl    ; save increment value
+              ld    (0x78E1),a     ; set AUTO flag
+              pop   hl             ; load starting value
+              ld    (0x78E2),hl    ; and save
+              pop   bc             ; reload return address from stack
+              jp    MAIN_LOOP_READY ; to main loop
+
+; IF Statement
+; CMD_IF: (defined in symbols.sym)
+              call  0x2337         ; evaluate conditional expression
+              ld    a,(hl)         ; load character
+              cp    0x2C           ; = ',' ?
+              call  z,CHRGTR       ; yes, next character
+              cp    0xCA           ; = THEN token?
+              call  z,CHRGTR       ; yes, next character
+              dec   hl             ; program pointer - 1
+              push  hl             ; and on stack
+              call  VSIGN          ; result = 0? (not fulfilled!)
+              pop   hl             ; load program pointer
+              jr    z,IF_ELSE      ; yes, to ELSE execution
+IF_THEN:
+              rst   0x10           ; next character
+              jp    c,GOTO         ; digit? yes-execute jump
+              jp    0x1D5F         ; no, execute next statement
+IF_ELSE:
+              ld    d,0x01         ; nesting counter = 1
+@L1:
+              call  CMD_DATA       ; search next statement,
+              or    a              ; end of line?
+              ret   z              ; done, no ELSE
+              rst   0x10           ; next character
+              cp    0x95           ; = ELSE token?
+              jr    nz,@L1         ; no, continue searching
+              dec   d              ; correct ELSE?
+              jr    nz,@L1         ; no, continue searching
+              jr    IF_THEN        ; yes, continue like THEN
+
+; LPRINT Statement
+; CMD_LPRINT: (defined in symbols.sym)
+              ld    a,0x01         ; output flag = printer
+              ld    (0x789C),a
+              jp    PRINT_LOOP     ; continue at PRINT
+
+; PRINT Statement
+; CMD_PRINT: (defined in symbols.sym)
+              call  0x79CA         ; RAM expansion output
+              cp    0x40           ; PRINT @ ?
+              jr    nz,PRINT_HASH  ; no!
+PRINT_AT:
+              call  0x2B01         ; evaluate position expression
+              cp    0x02           ; position > 511?
+              jp    nc,0x1E4A      ; yes, FUNCTION CODE - Error
+              push  hl             ; program pointer on stack
+              ld    hl,0x7000      ; load screen start address
+              add   hl,de          ; add position
+              ld    (CURS_ADDR),hl ; save as new cursor address
+              ld    a,e            ; determine cursor position in line
+              and   0x1F           ; = last 5 bits of cursor address
+              ld    (TTYPOS),a     ; save as new cursor position
+              pop   hl             ; load program pointer
+              rst   8              ; follows a comma?
+              DEFB  0x2C
+PRINT_HASH:
+              cp    0x23           ; cassette output?
+              jr    nz,PRINT_LOOP  ; no, continue
+              call  TAPE_CMD_WRITE_HEADER ; write lead-in to cassette
+              ld    a,0x80         ; output flag on cassette
+              ld    (0x789C),a
+PRINT_LOOP:
+              dec   hl             ; program pointer - 1
+              rst   0x10           ; next character. end of statement?
+              call  z,PRINT_CR     ; yes, output CR
+              jp    z,PRINT_FINAL  ; and done
+              cp    0xBF           ; = USING token?
+              jp    z,PRINUS       ; yes, formatted output
+              cp    0xBC           ; = TAB token?
+              jp    z,PRINT_TAB    ; yes!
+              push  hl             ; program pointer on stack
+              cp    0x2C           ; comma ?
+              jp    z,PRINT_COMMA  ; yes, to next TAB position
+              cp    0x3B           ; semicolon ?
+              jp    z,WAIT_OUTPUT_EMPTY ; wait until all characters output.
+              pop   bc             ; load program pointer
+              call  0x2337         ; evaluate expression
+              push  hl             ; program pointer on stack
+              rst   0x20           ; test data type
+              jr    z,PRINT_VAL    ; string? yes, jump
+              call  PUSTR_UNFORM_INIT ; convert num. values to string
+              call  STRFDESC       ; string in intermediate storage and X
+              call  0x79CD         ; RAM expansion output
+              ld    hl,(FACLO)     ; load string pointer from X reg
+              ld    a,(0x789C)     ; load output flag
+              or    a              ; and test
+              jp    m,0x20E9       ; cassette? yes-no formatting
+              jr    z,@L1          ; screen? yes-jump
+              ld    a,(0x789B)     ; load print head position
+              add   a,(hl)         ; + string length
+              cp    0x84           ; > line length (132)?
+              jr    @L2            ; continue at 20E6H
+@L1:
+              ld    a,(0x789D)     ; load screen line length
+              ld    b,a            ; in B
+              ld    a,(TTYPOS)     ; load cursor position in line
+              add   a,(hl)         ; + string length
+              cp    b              ; > line length (64)?
+@L2:
+              call  nc,PRINT_CR    ; yes, output Carriage Return
+              call  0x28AA         ; output string
+              ld    a,0x20         ; then a space
+              call  CHAR_OUTPUT_DISPATCH ; output string
+              or    a              ; Z=0, so next command is skipped.
+PRINT_VAL:
+              call  z,0x28AA       ; print string
+              pop   hl             ; load program pointer
+              jp    PRINT_LOOP     ; continue!
+
+; Check if cursor is at start of line
+PRINT_BOL_CHECK:
+              call  GET_TTYPOS     ; load cursor position
+              or    a              ; = 0 ?
+              ret   z              ; yes, back
+
+; Output Carriage-Return
+; PRINT_CR: (defined in symbols.sym)
+              ld    a,0x0D         ; load CR code
+              call  CHAR_OUTPUT_DISPATCH ; and output
+              call  0x79D0         ; RAM expansion output
+              xor   a              ; reset A + flags
+              ret   
+
+; evaluate ','
+; PRINT_COMMA: (defined in symbols.sym)
+              call  0x79D3         ; RAM expansion output
+              ld    a,(0x789C)     ; load output flag
+              or    a              ; and test
+              jp    p,0x2119       ; printer? ja!
+              ld    a,0x2C         ; record comma on cassette
+              call  CHAR_OUTPUT_DISPATCH ; and output
+              jr    PRINT_NEXT     ; continue at 2164H
+              jr    z,@L1          ; screen? ja - jump
+              ld    a,(0x789B)     ; print head position in line
+              cp    0x70           ; = 112?
+              jp    0x212B         ; continue at 212BH
+@L1:
+              ld    a,(0x789E)     ; load screen line length
+              ld    b,a            ; in B
+              ld    a,(0x7AAE)     ; load cursor position in line
+              cp    b              ; < last TAB position?
+              call  nc,PRINT_CR    ; no, output Carriage Return
+              jr    nc,PRINT_NEXT  ; and continue
+@L2:
+              sub   0x10           ; cursor position - 16 to < 0
+              jr    nc,@L2
+              cpl                  ; one's complement
+              jr    @L3            ; = number of spaces - 1
+
+; evaluate TAB
+; PRINT_TAB: (defined in symbols.sym)
+              call  0x2B1B         ; evaluate expression, integer
+              and   0x3F           ; clear bit 7 (max 127)
+              ld    e,a            ; in E
+              rst   8              ; follows a ')'?
+              add   hl,hl
+              dec   hl             ; program pointer - 1
+              push  hl             ; and on stack
+              call  0x79D3         ; RAM expansion output
+              ld    a,(0x789C)     ; load output flag
+              or    a              ; and test
+              jp    m,0x1E4A       ; cassette? FUNCTION CODE - Error
+              jp    z,0x2153       ; screen? ja-jump
+              ld    a,(0x789B)     ; load print head position
+              jr    @L4            ; continue at screen
+              ld    a,(TTYPOS)     ; load cursor position
+@L4:
+              cpl                  ; one's complement
+              add   a,e            ; + TAB value
+              jr    nc,PRINT_NEXT  ; already reached or exceeded?
+@L3:
+              inc   a              ; + 1
+              ld    b,a            ; number of spaces to output
+              ld    a,0x20         ; load space code
+@L5:
+              call  CHAR_OUTPUT_DISPATCH ; and output
+              dec   b              ; counter - 1
+              jr    nz,@L5         ; != 0? no - next space
+
+; Next PRINT - sub-expression
+; PRINT_NEXT: (defined in symbols.sym)
+              pop   hl             ; load program pointer
+              rst   0x10           ; address next character
+              jp    0x20A0         ; and back
+
+; Final PRINT check
+; PRINT_FINAL: (defined in symbols.sym)
+              ld    a,(0x789C)     ; load output flag
+              nop                  ; 4 x NOP
+              nop   
+              nop   
+              nop   
+              xor   a              ; reset output flag
+              ld    (0x789C),a     ; set to screen
+              call  0x79BE         ; RAM expansion output
+              ret   
+
+; Text Definition
+; REDO_TEXT: (defined in symbols.sym)
+              DEFM  "?REDO"        ; ?REDO
+              DEFB  0x0D,0x00      ; 0x0D, 0x00
+
+; Error during data input
+; INPUT_REDO: (defined in symbols.sym)
+              ld    a,(USING_BUF)  ; DATA flag set?
+              or    a              ; A
+              jp    nz,SYNTAX_ERR_DATA ; ja, SYNTAX ERROR in DATA instruction
+              ld    a,(0x78A9)     ; input from cassette?
+              or    a              ; A
+              ld    e,0x2A         ; error code in E
+              jp    z,ERROR_HANDLER ; ja, BAD FILE DATA - Error
+              pop   bc             ; keyboard input, load buffer pointer
+              ld    hl,REDO_TEXT   ; address text '?REDO'
+              call  OUTSTR         ; and output
+              ld    hl,(0x78E6)    ; current program pointer in HL
+              ret                  ; restart input
+
+; INPUT Statement
+; CMD_INPUT: (defined in symbols.sym)
+              call  DIRCHK         ; direct command?
+              ld    a,(hl)         ; load character
+              call  0x79D6         ; RAM expansion output
+              sub   0x23           ; read from cassette?
+              ld    (0x78A9),a     ; difference as INPUT flag (0=cass)
+              ld    a,(hl)         ; load character
+              jr    nz,INPUT_KEYBOARD ; no cassette!
+
+; Read from Cassette
+; INPUT_CASSETTE: (defined in symbols.sym)
+              call  TAPE_CMD_SEARCH ; search file on cassette
+              push  hl             ; program pointer on stack
+              ld    b,0xFA         ; max. 250 characters
+              ld    hl,(IO_BUF_PTR) ; address I/O buffer
+@L7:
+              call  TAPE_READ_1_BYTE ; read one byte
+              ld    (hl),a         ; transfer to buffer
+              inc   hl             ; buffer pointer + 1
+              cp    0x0D           ; end of record?
+              jr    z,@L6          ; ja!
+              djnz  @L7            ; counter - 1 = 0?
+@L6:
+              dec   hl             ; ja, mark end of record with 00
+              ld    (hl),0x00      ; Load (HL),0
+              nop                  ; 3 x NOP
+              nop   
+              nop   
+              ld    hl,(IO_BUF_PTR) ; address buffer start
+              dec   hl             ; buffer pointer 1 byte before start
+              jr    @L8            ; continue at 21EBH
+
+; Read from Keyboard
+; INPUT_KEYBOARD: (defined in symbols.sym)
+              ld    bc,0x21DB      ; set return address
+              push  bc             ; BC
+              cp    0x22           ; with previous text output?
+              ret   nz             ; no, continue at 21DBH
+              call  0x2866         ; text in buffer and X
+              rst   8              ; follows a semicolon?
+              DEFB  0x3B           ; DEFB ';'
+              push  hl             ; program pointer on stack
+              call  0x28AA         ; output text
+              pop   hl             ; load program pointer
+              ret                  ; continue at 21DBH
+              push  hl             ; program pointer on stack
+              call  PROMPT         ; print '?' and read line into I/O buffer
+              pop   bc             ; program pointer in BC
+              jp    c,CMD_END_INPUT ; BREAK? ja - jump
+              inc   hl             ; buffer pointer to 1st character
+              ld    a,(hl)         ; load character
+              or    a              ; end of text?
+              dec   hl             ; A
+              push  bc             ; program pointer back to 1st character
+              jp    z,CMD_DATA_SKIP ; no text, skip INPUT instruction
+@L8:
+              ld    (hl),0x2C      ; set comma before first character
+              jr    DATA_FLAG_CLEAR ; continue at 21F4H
+
+; READ Statement
+; CMD_READ: (defined in symbols.sym)
+              push  hl             ; program pointer on stack
+              ld    hl,(0x78FF)    ; DATA pointer in HL
+              DEFB  0xF6           ; set DATA flag
+
+; Clear DATA flag
+; DATA_FLAG_CLEAR: (defined in symbols.sym)
+              xor   a              ; clear DATA flag (Redefinition of 21F4H)
+              ld    (USING_BUF),a  ; save DATA flag
+              ex    (sp),hl        ; buffer/DATA pointer on stack
+              jr    INPUT_READ_LOOP ; continue at 21FDH
+
+; Next Variable
+; READ_NEXT_VAR: (defined in symbols.sym)
+              rst   8              ; follows a comma?
+              DEFB  0x2C           ; DEFB ','
+INPUT_READ_LOOP:
+              call  VARPTR_FIND_OR_CREATE ; Search for variable in variable table
+              ex    (sp),hl        ; Program pointer on stack
+              push  de             ; Var. tab. address in DE
+              ld    a,(hl)         ; Load character from buffer
+              cp    0x2C           ; = comma ?
+              jr    z,INPUT_VALUE_START ; yes, continue
+
+; Buffer empty (no ',')
+INPUT_EMPTY_BUFFER:
+              ld    a,(USING_BUF)  ; DATA flag set ?
+              or    a
+              jp    nz,DATA_FIND_STMT_END ; yes, search for next DATA statement
+              ld    a,(0x78A9)     ; Input from cassette ?
+              or    a
+              ld    e,0x06         ; Error code in E
+              jp    z,ERROR_HANDLER ; yes, OUT OF DATA - Error
+INPUT_PROMPT_AGAIN:
+              ld    a,0x3F         ; Keyboard: output '?'
+              call  CHAR_OUTPUT_DISPATCH ; Tastatur: '?' ausgeben
+              call  PROMPT         ; Re-enter with '??'
+              pop   de             ; Load var. tab. address
+              pop   bc             ; Program pointer in BC
+              jp    c,CMD_END_INPUT ; BREAK? yes - jump
+              inc   hl             ; Buffer pointer to 1st character
+              ld    a,(hl)         ; Load character
+              or    a              ; End of line ?
+              dec   hl             ; Buffer pointer before 1st character
+              push  bc             ; Program pointer on stack
+              jp    z,CMD_DATA_SKIP ; yes, skip remaining input, without changing variable values
+              push  de
+
+; Decode input
+INPUT_VALUE_START:
+              call  HOOK_INPUT_VALUE ; RAM expansion output
+              rst   0x20           ; Test type of variable
+              push  af             ; Save type flag
+              jr    nz,INPUT_VALUE_NUMERIC ; numeric? yes, jump
+
+; Accept string
+INPUT_VALUE_STRING:
+              rst   0x10           ; Buffer pointer to next character
+              ld    d,a            ; as delimiter in D and B
+              ld    b,a
+              cp    0x22           ; Quotation mark ?
+              jr    z,INPUT_STRING_PROC ; yes, use '\
+              ld    d,0x3A         ; no, ':' and ',' as delimiters
+              ld    b,0x2C
+              dec   hl             ; Buffer pointer back 1 byte
+INPUT_STRING_PROC:
+              call  STR_TO_FAC     ; String in temporary storage and X
+
+; Store new variable value
+              pop   af             ; Load type flag
+              ex    de,hl          ; Buffer pointer in DE
+              ld    hl,INPUT_VALUE_NEXT ; Return address in HL
+              ex    (sp),hl        ; swap with var. tab. adr. on stack
+              push  de             ; Buffer pointer on stack
+              jp    LET_VAR_PTR_LOAD ; Jump to LET and then 225AH
+
+; Take number into X
+INPUT_VALUE_NUMERIC:
+              rst   0x10           ; Address next character
+              pop   af             ; Load type flag
+              push  af             ; and back on stack
+              ld    bc,0x2243      ; Return address on stack
+              push  bc
+              jp    c,STR_TO_NUM   ; Integer and single precision? yes, convert string, then 2243H
+              jp    nc,STR_TO_DOUBLE ; double precision? conv., then 2243H
+INPUT_VALUE_NEXT:
+              dec   hl             ; Buffer pointer - 1
+              rst   0x10           ; next character. 00 or ':' ?
+              jr    z,@L1          ; yes, end of line !
+              cp    0x2C           ; Comma ?
+              jp    nz,INPUT_REDO  ; no, error
+@L1:
+              ex    (sp),hl        ; Program pointer with buffer pointer exchange on stack
+              dec   hl             ; Program pointer - 1
+              rst   0x10           ; next character. = end of statement?
+              jp    nz,READ_NEXT_VAR ; no, continue with next variables
+
+; No further variables
+INPUT_EXTRA_CHECK:
+              pop   de
+              nop   
+              nop   
+              nop   
+              nop   
+              nop   
+              ld    a,(USING_BUF)  ; Load DATA flag
+              or    a              ; set ?
+              ex    de,hl          ; Buffer pointer-HL, prog pointer-DE
+              jp    nz,0x1D96      ; Store buffer pointer as DATA pointer, Program pointer in HL, do
+              push  de             ; Program pointer on stack
+              call  HOOK_READ_INPUT_LIST ; RAM expansion output
+              or    (hl)
+              ld    hl,EXTRA_IGNORED_TEXT ; Address text '?EXTRA IGNORED'
+              call  nz,OUTSTR      ; no, output text
+              pop   hl             ; Load program pointer
+              jp    PRINT_FINAL    ; Output flag to screen, done
+; EXTRA_IGNORED_TEXT: (defined in symbols.sym)
+              DEFM  "?EXTRA IGNORED"
+              DEFB  0x0D,0x00
+
+; Search for next DATA statement
+DATA_FIND_STMT_END:
+              call  CMD_DATA       ; Search for end of statement
+              or    a              ; = end of line ?
+              jr    nz,DATA_SEARCH_LOOP ; no!
+              inc   hl             ; yes, end of program ?
+              ld    a,(hl)         ; (Line pointer = 0000)
+              inc   hl
+              or    (hl)
+              ld    e,0x06         ; Error code in E
+              jp    z,ERROR_HANDLER ; yes, OUT OF DATA - Error
+              inc   hl             ; Load line number
+              ld    e,(hl)
+              inc   hl
+              ld    d,(hl)
+              ex    de,hl
+              ld    (DATA_LINE_NUM),hl ; and store as DATA line number
+              ex    de,hl          ; Line number back in DE
+DATA_SEARCH_LOOP:
+              rst   0x10           ; Next character from program text
+              cp    0x88           ; = DATA token ?
+              jr    nz,DATA_FIND_STMT_END ; no, continue searching
+              jp    INPUT_VALUE_START ; continue reading data
+
+; NEXT statement
+; Looping in FOR-NEXT loops
+; CMD_NEXT: (defined in symbols.sym)
+              ld    de,START       ; Var. tab. address = 0 (for NEXT without variable)
+              call  nz,VARPTR_FIND_OR_CREATE ; further characters? yes - variable search, var. tab. address in
+              ld    (0x78DF),hl    ; Store program pointer
+              call  STACK_RECOVERY ; in stack next, or loop search with correct running variable
+              jp    nz,NEXT_WITHOUT_FOR_ERR ; not found, NEXT WITHOUT FOR
+              ld    sp,hl          ; by stack correction all associated nested loops removed.
+              ld    (0x78E8),hl    ; remove nested loops.
+              push  de             ; Var. tab. adr of loop var on stack.
+              ld    a,(hl)         ; Load increment flag
+              inc   hl             ; Stack pointer + 1
+              push  af             ; Increment flag on stack
+              push  de             ; Var. tab. address on stack
+              ld    a,(hl)         ; Load type flag
+              inc   hl             ; Stack pointer + 1
+              or    a              ; = single precision?
+              jp    m,NEXT_INTEGER_LOOP ; no! - jump
+
+; Single precision loop variable
+; NEXT_VARIABLE_PROC: (defined in symbols.sym)
+              call  MOVFM          ; Increment value in X
+              ex    (sp),hl        ; Load var. tab. address, Stack pointer on stack
+              push  hl             ; Var. tab. address back on stack
+              call  0x070B         ; Loop variable + increment value
+              pop   hl             ; Load var. tab. address
+              call  MOVMF          ; Store new value of loop var.
+              pop   hl             ; Load stack pointer
+              call  MOVRM          ; Load end value into Y
+              push  hl             ; Stack pointer on stack
+              call  FCOMP          ; Compare loop variable with end value
+              jr    $+43           ; continue at 2313H
+NEXT_INTEGER_LOOP:
+              inc   hl             ; Skip 2 unused stack levels
+              inc   hl
+              inc   hl
+              inc   hl
+              ld    c,(hl)         ; Increment value in BC
+              inc   hl
+              ld    b,(hl)         ; (MSB)
+              inc   hl
+              ex    (sp),hl        ; Load var. tab. address of the loop variable
+              ld    e,(hl)         ; Load value of the loop variable
+              inc   hl
+              ld    d,(hl)
+              push  hl             ; Var. tab. address + 1 on the stack
+              ld    l,c            ; Increment value in HL
+              ld    h,b
+              call  IADD           ; Loop variable + increment value in HL and X
+              ld    a,(VALTYP)     ; Type in X = single precision?
+              cp    0x04           ; (Overflow)
+              jp    z,0x07B2       ; yes, OVERFLOW - Error
+              ex    de,hl          ; new loop variable in DE
+              pop   hl             ; load var. tab. address + 1
+              ld    (hl),d         ; and store new value
+              dec   hl
+              ld    (hl),e
+              pop   hl             ; load stack pointer
+              push  de             ; new value of loop variable on stack
+              ld    e,(hl)         ; load end value
+              inc   hl
+              ld    d,(hl)
+              inc   hl
+              ex    (sp),hl        ; stack pointer on the stack
+NEXT_CHECK_END:
+              call  DCOMP          ; Compare loop variable with end value
+              pop   hl             ; load stack pointer
+              pop   bc             ; load increment flag
+              sub   b              ; Link comparison result with increment flag
+              call  MOVRM          ; Load line number and starting pointer into DE and BC
+              jr    z,NEXT_LOOP_FINISHED ; Loop ended? yes - jump
+              ex    de,hl          ; Line number in HL
+              ld    (0x78A2),hl    ; Store as current line number
+              ld    l,c            ; Starting pointer of the line in HL
+              ld    h,b
+              jp    0x1D1A         ; Repeat loop
+
+; Loop ended
+NEXT_LOOP_FINISHED:
+              ld    sp,hl          ; Remove loop from stack
+              ld    (0x78E8),hl    ; by stack correction
+              ld    hl,(0x78DF)    ; Load program pointer
+              ld    a,(hl)         ; Load character
+              cp    0x2C           ; follows a comma?
+              jp    nz,NEWSTT      ; no, next statement
+              rst   0x10           ; address next character
+              call  0x22B9         ; process next outer loop
+
+; Evaluate expression
+EVAL_EXPR_START:
+              DEFB  0xCF           ; Expression begins with a parenthesis?
+              DEFB  0x28           ; no - SYNTAX ERROR
+              dec   hl             ; Program pointer - 1
+              ld    d,0x00         ; Priority code of the last operand = 0
+              push  de             ; Priority code on the stack
+              ld    c,0x01         ; At least 2 bytes free?
+              call  CHECK_FREE_MEMORY ; no, OUT OF MEMORY - Error
+              call  EVAL_OPERAND   ; Analyze operands and in X
+              ld    (SAVP),hl      ; Store program pointer
+              ld    hl,(SAVP)      ; Load program pointer
+              pop   bc             ; Priority code in B load
+EVAL_EXPR_OP_LOOP:
+              ld    a,(hl)         ; Next character from program
+              ld    d,0x00         ; Set operator code = 0
+@L1:
+              sub   0xD4           ; Comparison operator? ( > = < )
+              jr    c,EVAL_EXPR_CHK_COMP ; no!
+              cp    0x03           ; (Token D4, D5 and D6)
+              jr    nc,EVAL_EXPR_CHK_COMP ; no!
+              cp    0x01           ; Set Carry for '>'
+              rla                  ; Shift 1 bit left ( > = 1, = = 2, < = 4 )
+              xor   d              ; Set corresponding bit in operator code
+              cp    d              ; was already set before?
+              ld    d,a            ; (i.e. the same operator twice)
+              jp    c,SYNTAX_ERR_HANDLER ; yes - SYNTAX ERROR
+              ld    (FMT_FLAG),hl  ; Store program pointer
+              rst   0x10           ; Load next character
+              jr    @L1            ; and investigate
+EVAL_EXPR_CHK_COMP:
+              ld    a,d            ; Operator code > 0 ?
+              or    a              ; (Comparison operator found)
+              jp    nz,CHK_OP_PRIO ; yes!
+              ld    a,(hl)         ; Load character
+              ld    (FMT_FLAG),hl  ; Store program pointer
+              sub   0xCD           ; One of the other operators?
+              ret   c              ; + - * / ** AND OR ?
+              cp    0x07
+              ret   nc             ; no!
+              ld    e,a            ; Operator code in E
+              ld    a,(VALTYP)     ; is X a string?
+              sub   0x03           ; SUB 3
+              or    e              ; and '+' operator?
+              jp    z,STR_CONCAT   ; yes, string concatenation
+              ld    hl,0x189A      ; Address table of priority codes
+              add   hl,de          ; + operator code
+              ld    a,b            ; Last priority in A
+              ld    d,(hl)         ; New priority from table in D
+              cp    d              ; Last priority >= new priority?
+              ret   nc             ; yes, perform last operation
+              push  bc             ; no, last priority on stack
+              ld    bc,0x2346      ; Address for next operand on stack
+              push  bc
+              ld    a,d            ; New priority in A
+              cp    0x7F           ; is = 7FH (Operator = **) ?
+              jp    z,EVAL_EXPR_POWER ; yes, continue at 23D4H
+              cp    0x51           ; Operator = AND or OR?
+              jp    c,EVAL_EXPR_LOGIC ; yes, continue at 23E1H
+
+; Operands for +, -, * and / on the stack
+              ld    hl,FACLO       ; X address in HL
+              or    a              ; Clear carry
+              ld    a,(VALTYP)     ; Load type code
+              dec   a              ; Type code - 3
+              dec   a              ; is = string ?
+              dec   a
+              jp    z,TMERR        ; yes, TYPE MISMATCH - Error
+              ld    c,(hl)         ; X address in HL
+              inc   hl             ; X address + 1
+              ld    b,(hl)         ; in Byte
+              push  bc             ; and on stack
+              jp    m,0x23C5       ; if integer done!
+              inc   hl             ; otherwise load 2 more bytes
+              ld    c,(hl)
+              inc   hl
+              ld    b,(hl)
+              push  bc             ; and on the stack
+              push  af             ; Type flag on the stack
+              or    a              ; is single precision?
+              jp    po,0x23C4      ; yes, done!
+              pop   af             ; Reload type flag
+              inc   hl             ; X address + 1
+              jr    c,@L1          ; is on stack ? yes - jump
+              ld    hl,0x791D      ; Load LSB X address
+@L1:
+              ld    c,(hl)         ; Load 2 more bytes
+              inc   hl
+              ld    b,(hl)
+              inc   hl
+              push  bc             ; 2 bytes on the stack
+              ld    c,(hl)         ; and load 2 more bytes
+              inc   hl
+              ld    b,(hl)
+              push  bc             ; also on the stack
+              DEFB  0x06
+              pop   af             ; skips the POP / Load type flag (for single prec.)
+              add   a,0x03         ; Calculate type code
+              ld    c,e            ; Operator code in C
+              ld    b,a            ; Type code in B
+              push  bc             ; Put on the stack
+              ld    bc,DO_OP       ; Address for performing
+              push  bc             ; operations on the stack
+              ld    hl,(FMT_FLAG)  ; Load program pointer
+              jp    0x233A         ; next operand
+
+; Operands for exponentiation on the stack
+EVAL_EXPR_POWER:
+              call  FRCSNG         ; Convert X to single precision
+              call  PUSHF          ; Transfer X to the stack
+              ld    bc,0x13F2      ; Address for power calculation
+              ld    d,0x7F         ; New priority code = 7FH
+              jr    $-18
+
+; Operands for AND and OR on the stack
+EVAL_EXPR_LOGIC:
+              push  de             ; Operator on stack
+              call  FRCINT         ; Convert operand to integer
+              pop   de             ; Reload operator code
+              push  hl             ; Operand on stack
+              ld    bc,0x25E9      ; Address for AND and OR processing
+              jr    $-29
+
+; Process comparison operators
+CHK_OP_PRIO:
+              ld    a,b            ; did last operator have higher
+              cp    0x64           ; or equal priority?
+              ret   nc             ; yes, calculate last operation
+              push  bc             ; last priority on stack
+              push  de             ; operator code on stack
+              ld    de,0x6404      ; priority in D, comparison code in E
+              ld    hl,0x25B8      ; address for processing the
+              push  hl             ; comparison result on stack
+              rst   0x20           ; test data type
+              jp    nz,0x2395      ; numeric? yes - operands on stack
+              ld    hl,(FACLO)     ; string! string pointer on stack
+              push  hl
+              ld    bc,0x258C      ; load address for string comparison
+              jr    $-55           ; and on the stack
+
+; Execute operations
+DO_OP:
+              pop   bc             ; load operator code and type
+              ld    a,c            ; save operator code
+              ld    (0x78B0),a
+              ld    a,b            ; type in A
+              cp    0x08           ; 1st operand double precision?
+              jr    z,OP1_DOUBLE   ; yes!
+              ld    a,(VALTYP)     ; load type of 2nd operand
+              cp    0x08           ; is double precision?
+              jp    z,OP2_DOUBLE   ; yes!
+              ld    d,a            ; type of 2nd operand in D
+              ld    a,b            ; type of 1st operand in A
+              cp    0x04           ; is single precision?
+              jp    z,OP1_SINGLE   ; yes!
+              ld    a,d            ; load type of 2nd operand
+              cp    0x03           ; and test
+              jp    z,TMERR        ; string! - TYPE MISMATCH error
+              jp    nc,OP2_SINGLE  ; single precision! - jump
+
+; Execute integer operations
+DO_INT_OP:
+              ld    hl,0x18BF      ; start of jump table 'Integer'
+              ld    b,0x00         ; add operator code twice
+              add   hl,bc
+              add   hl,bc
+              ld    c,(hl)         ; load jump address
+              inc   hl
+              ld    b,(hl)
+              pop   de             ; get 1st operand from stack
+              ld    hl,(FACLO)     ; load 2nd operand from X
+              push  bc             ; jump address on stack
+              ret                  ; jump to routine
+
+; 1st operand double precision
+OP1_DOUBLE:
+              call  FRCDBL         ; convert 2nd operand to double precision
+              call  VMOVAF         ; and transfer to Y
+              pop   hl             ; 1st operand from stack in X
+              ld    (0x791F),hl    ; first the 4 low-order bytes
+              pop   hl
+              ld    (0x791D),hl
+              pop   bc             ; the next 3 bytes and the exponent
+              pop   de
+              call  MOVFR          ; also in X
+              call  FRCDBL         ; convert 1st operand to double precision
+              ld    hl,0x18AB      ; load start of jump table
+              ld    a,(0x78B0)     ; load operator code
+              rlca                 ; * 2
+              push  bc             ; save BC
+              ld    c,a            ; operator code * 2 in BC
+              ld    b,0x00
+              add   hl,bc          ; add to start address of jump table
+              pop   bc             ; restore BC
+              ld    a,(hl)         ; load jump address
+              inc   hl
+              ld    h,(hl)
+              ld    l,a
+              jp    (hl)           ; jump to execution routine
+
+; 2nd operand double precision
+OP2_DOUBLE:
+              push  bc
+              call  VMOVAF         ; transfer 2nd operand to Y
+              pop   af             ; type of 1st operand
+              ld    (VALTYP),a     ; in type byte
+              cp    0x04           ; is single precision?
+              jr    z,$-36         ; yes, continue at 2446H
+              pop   hl             ; no, integer in HL
+              ld    (FACLO),hl     ; and in X
+              jr    $-37           ; continue at 244BH
+
+; 1st operand single precision
+OP1_SINGLE:
+              call  FRCSNG         ; convert 2nd operand to single precision
+              pop   bc             ; 1st operand from stack in Y
+              pop   de
+              ld    hl,0x18B5      ; start address of jump table
+              jr    $-41           ; continue at 2451H
+
+; 2nd operand single precision
+OP2_SINGLE:
+              pop   hl             ; 1st operand (integer) in HL
+              call  PUSHF          ; 2nd operand on stack
+              call  0x0ACF         ; convert 1st operand to single precision
+              call  MOVRF          ; and transfer to Y
+              pop   hl             ; 2nd operand from stack in X
+              ld    (FAC_SIGN),hl  ; (Exp. + MSB)
+              pop   hl
+              ld    (FACLO),hl     ; (2 byte LSB)
+              jr    $-23           ; continue at 2477H
+
+; Integer - Division
+INT_DIV:
+              push  hl             ; input: DE = dividend, HL = divisor
+              ex    de,hl          ; divisor on stack
+              call  0x0ACF         ; dividend in HL
+              pop   hl             ; and with single precision in X
+              call  PUSHF          ; load divisor
+              call  0x0ACF         ; dividend from X on stack
+              jp    0x08A0         ; divisor with single precision in X, for division with single pr
+
+; Evaluate operands for expression analysis
+; EVAL_OPERAND: (defined in symbols.sym)
+              rst   0x10           ; address next character
+              ld    e,0x28         ; error code in E
+              jp    z,ERROR_HANDLER ; end of statement, MISSING OPERAND error
+              jp    c,STR_TO_NUM   ; digit! determine value and in X
+              call  ISLET          ; letter?
+              jp    nc,0x2540      ; yes, variable value in expression
+              cp    0xCD           ; '+' sign?
+              jr    z,EVAL_OPERAND ; yes, ignore
+              cp    0x2E           ; character = '.' ?
+              jp    z,STR_TO_NUM   ; yes, number to X, done
+              cp    0xCE           ; '-' sign?
+              jp    z,0x2532       ; yes, evaluate
+              cp    0x22           ; quotation marks?
+              jp    z,0x2866       ; yes, string constant in X
+              cp    0xCB           ; NOT token?
+              jp    z,0x25C4       ; yes, execute
+              cp    0x26           ; '&' ?
+              jp    z,0x7994       ; yes, to RAM expansion output
+              cp    0xC3           ; ERR token?
+              jr    nz,ERL_FUNC    ; no, continue
+
+; ERR function
+ERR_FUNC:
+              rst   0x10           ; results in the last error code
+              ld    a,(0x789A)     ; load last error code
+              push  hl             ; program pointer on stack
+              call  0x27F8         ; error code as integer in X
+              pop   hl             ; load program pointer again
+              ret                  ; done
+
+; ERL function
+ERL_FUNC:
+              cp    0xC2           ; is ERL token?
+              jr    nz,VARPTR_CHK  ; no, continue
+              rst   0x10           ; address next character
+              push  hl             ; program pointer on stack
+              ld    hl,(0x78EA)    ; load last error line number
+              call  INEG_OVERFLOW  ; convert to single precision and in X
+              pop   hl             ; load program pointer again
+              ret                  ; done
+
+; VARPTR function
+VARPTR_CHK:
+              cp    0xC0           ; is VARPTR token?
+              jr    nz,$+22        ; no, continue
+
+; VARPTR function
+VARPTR_FUNC:
+              rst   0x10           ; address next character
+              rst   8              ; address next character
+              DEFB  0x28           ; follows a '(' ?
+GET_VAR_ADDR:
+              call  VARPTR_FIND_OR_CREATE ; determine address of variable
+              rst   8              ; closed with ')' ?
+              DEFB  0x29           ; DEFB ')'
+              push  hl             ; program pointer on stack
+              ex    de,hl          ; variable table address in HL
+              ld    a,h            ; X = 0?
+              or    l
+              jp    z,0x1E4A       ; (variable not in table) yes, FUNCTION CODE error
+              call  MAKINT         ; variable table address as integer in X
+              pop   hl             ; load program pointer again
+              ret                  ; done
+              cp    0xC1           ; = USR-Token ?
+              jp    z,USR          ; yes!
+              cp    0xC5           ; = INSTR$-Token ?
+              jp    z,0x799D       ; yes, to RAM expansion exit
+              cp    0xC8           ; = MEM-Token ?
+              jp    z,MEM          ; yes!
+              cp    0xC7           ; = TIME$-Token ?
+              jp    z,0x7976       ; yes, to RAM expansion exit
+              cp    0xC6           ; = POINT-Token ?
+              jp    z,POINT        ; yes!
+              cp    0xC9           ; = INKEY$-Token ?
+              jp    z,0x019D       ; yes!
+              cp    0xC4           ; = STRING$-Token ?
+              jp    z,FNSTR_DOLLAR ; yes!
+              cp    0xBE           ; = FN-Token ?
+              jp    z,0x7955       ; yes, to RAM expansion exit
+              sub   0xD7           ; Function token ?
+              jp    nc,0x254E      ; yes!
+
+; Evaluate parenthetical expression
+              call  EVAL_EXPR_START ; no, evaluate expression enclosed in parentheses
+              rst   8              ; evaluate expression
+              add   hl,hl          ; closed with ')' ?
+              ret                  ; done
+
+; Evaluate '-' sign
+              ld    d,0x7D         ; Priority for '-' sign
+              call  0x233A         ; Evaluate expression with priority in DE. If not
+              ld    hl,(SAVP)      ; load program pointer
+              push  hl             ; and on stack
+              call  VNEG           ; Result * (-1)
+              pop   hl             ; reload program pointer
+              ret                  ; done
+
+; Include variable value in expression
+; Determine variable in variable table
+; Var.Tab.-Addr. in DE. If not
+              call  VARPTR_FIND_OR_CREATE ; determine variable in variable table
+              push  hl             ; program pointer on stack
+              ex    de,hl          ; Var.Tab.-Addr. in HL
+              ld    (FACLO),hl     ; and in X as string pointer
+              rst   0x20           ; String variable ?
+              call  nz,VMOVFM      ; no, variable value in X
+              pop   hl             ; reload program pointer
+              ret                  ; done
+
+; Evaluate function arguments and jump to function routines
+              ld    b,0x00         ; B = 0
+              rlca                 ; A = (Token - D7H) * 2
+              ld    c,a            ; in BC as table offset
+              push  bc             ; save on stack
+              rst   0x10           ; address next character
+              ld    a,c            ; LSB Tab-Offset > 41H ?
+              cp    0x41           ; (MID$, RIGHT$ o. LEFT$)
+              jr    c,@L1          ; no!
+              call  EVAL_EXPR_START ; 1. evaluate argument
+              rst   8              ; follows a comma ?
+              inc   l
+              call  CHKSTR         ; 1. argument not a string? TM-Error
+              ex    de,hl          ; program pointer in DE
+              ld    hl,(FACLO)     ; load string pointer
+              ex    (sp),hl        ; load Tab.Offset, string ptr on stk.
+              push  hl             ; load Tab.Offset also back on stack
+              ex    de,hl          ; program pointer back in HL
+
+; 2. argument analyze
+; integer value (< 256) in A
+              call  GETBYT         ; 2. argument analyze
+              ex    de,hl          ; 2. Arg. in HL, program pointer in DE
+              ex    (sp),hl        ; Tab.Offset load, 2.Arg. on stack
+              jr    @L2            ; continue at 2583H
+@L1:
+              call  0x252C         ; evaluate argument
+              ex    (sp),hl        ; load Tab.Offset, prog ptr on stack
+              ld    a,l            ; LSB Tab.Offset < 0CH ?
+              cp    0x0C           ; (SGN, INT, ABS, FRE, INP, POS)
+              jr    c,@L3          ; yes!
+
+; LSB Tab.Offset < 1BH ?
+; (SQR, RND, LOG, EXP, COS, SIN, TAN, ATN)
+              cp    0x1B           ; LSB Tab.Offset < 1BH ?
+              push  hl             ; Tab.Offset on stack
+              call  c,FRCSNG       ; yes, argument in single precision
+              pop   hl             ; reload Tab.Offset
+@L3:
+              ld    de,0x253E      ; set return address
+              push  de
+@L2:
+              ld    bc,0x1608      ; starting address of the jump table
+              add   hl,bc          ; + table offset
+              ld    c,(hl)         ; load jump address
+              inc   hl
+              ld    h,(hl)
+              ld    l,c
+              jp    (hl)           ; jump to function routine
+
+; String comparison
+; 2. string from temporary storage
+; and remove string area
+              call  REM_STR_TMP    ; 2. string from temporary storage
+              ld    a,(hl)         ; length 2. string in A
+              inc   hl
+              ld    c,(hl)         ; address 2. string in BC
+              inc   hl
+              ld    b,(hl)
+              pop   de
+              push  bc             ; address 1. string in DE
+
+; address 2. string on stack
+; length 2. string on stack
+              push  af             ; address 2. string on stack
+              call  REM_STR_TOP    ; 1. string from temporary storage
+              pop   de             ; and remove string area
+
+; length 2. string to D
+; length 1. string to E
+              ld    e,(hl)         ; length 2. string to D
+              inc   hl
+              ld    c,(hl)
+              inc   hl             ; address 1. string in BC
+              ld    b,(hl)
+              pop   hl             ; address 2. string in HL
+@L4:
+              ld    a,e            ; both strings empty?
+              or    d
+              ret   z              ; yes, back with A=0 (equal)
+              ld    a,d            ; length 2. string = 0?
+              sub   0x01
+              ret   c              ; yes, back with A=FF, Cy=1, S=1 (string 1 > string 2)
+              xor   a              ; 2. string = empty?
+              cp    e
+              inc   a
+              ret   nc             ; yes, back with A=1, Z=0, Cy=0 (string 1 < string 2)
+              dec   d              ; both string lengths - 1
+              dec   e
+              ld    a,(bc)         ; load character from 1. string
+              cp    (hl)           ; compare with character from 2. string
+              inc   hl             ; string pointer + 1
+              inc   bc
+              jr    z,@L4          ; both characters same, continue
+              ccf                  ; complement carry
+              jp    SIGNS          ; prepare flag, done
+
+; Summarize result of the comparison with the comparison operator to the 
+; overall result
+              inc   a              ; comparison result + 1
+              adc   a,a            ; *2 + Carry
+              pop   bc             ; load comparison operator code
+              and   b              ; does one bit match?
+              add   a,0xFF         ; yes, Carry = 1
+              sbc   a,a            ; and A=FF
+              call  CONIA          ; A as integer in X
+              jr    @L5            ; continue at 25D6H
+
+; Execute NOT
+              ld    d,0x5A         ; NOT priority in D
+              call  0x233A         ; Evaluate expression with priority
+              call  FRCINT         ; convert result to integer
+              ld    a,l            ; and invert
+              cpl                  ; (LSB)
+              ld    l,a
+              ld    a,h
+              cpl                  ; (MSB)
+              ld    h,a
+              ld    (FACLO),hl     ; transfer to X
+              pop   bc             ; reload last priority
+@L5:
+              jp    0x2346         ; continue at 2346H
+
+; Restart 20
+; tests the data type of the X-register
+              ld    a,(VALTYP)     ; load type code
+              cp    0x08           ; double precision?
+              jr    nc,@L6         ; yes!
+              sub   0x03           ; Type code - 3
+              or    a              ; set flags
+              scf                  ; among others Carry=1
+              ret   
+@L6:
+              sub   0x03           ; Type code - 3
+              or    a              ; set flags
+              ret   
+
+; Execute AND and OR
+              push  bc             ; last priority on stack
+              call  FRCINT         ; 2. convert operand to integer
+              pop   af             ; load priority in AF
+              pop   de             ; load 1. operand
+              ld    bc,0x27FA      ; set return address
+              push  bc
+              cp    0x46           ; AND ?
+              jr    nz,@L7         ; yes!
+              ld    a,e            ; both operands OR-linked
+              or    l              ; (LSB)
+              ld    l,a
+              ld    a,h
+              or    d              ; (MSB)
+              ret   
+@L7:
+              ld    a,e            ; both operands AND-linked
+              and   l              ; (LSB)
+              ld    l,a
+              ld    a,h
+              and   d              ; (MSB)
+              ret   
+; DIM_NEXT_ARG: (defined in symbols.sym)
+              dec   hl             ; Program pointer - 1
+              rst   0x10           ; address next character
+              ret   z              ; end of statement? yes-return
+              rst   8              ; follows a comma ?
+              inc   l
+
+; DIM - Command / Set up arrays
+              ld    bc,DIM_NEXT_ARG ; return address for next argument
+              push  bc
+              DEFB  0xF6           ; set DIM flag
+
+; Search for variable in table and set up if not present
+; VARPTR_FIND_OR_CREATE: (defined in symbols.sym)
+              xor   a              ; clear DIM flag
+; Note: 260D redefined
+              ld    (DIMFLG),a     ; store DIM flag
+
+; Determine name
+; GET_VAR_NAME: (defined in symbols.sym)
+              ld    b,(hl)         ; 1st character of variable name in B
+              call  ISLET          ; Letter ?
+              jp    c,SYNTAX_ERR_HANDLER ; no, SYNTAX ERROR
+              xor   a              ; clear (2nd character)
+              ld    c,a
+              rst   0x10           ; load next character
+              jr    c,@L8          ; Digit ? yes-jump
+              call  ISLET          ; Letter?
+              jr    c,GET_VAR_TYPE ; no, name only 1 letter
+@L8:
+              ld    c,a            ; 2nd character in C
+@L9:
+              rst   0x10           ; load next character
+              jr    c,@L9          ; Digit? yes-skip
+              call  ISLET          ; Letter?
+              jr    nc,@L9         ; yes, skip
+
+; Determine type
+; GET_VAR_TYPE: (defined in symbols.sym)
+              ld    de,0x2652      ; set return address
+              push  de
+              ld    d,0x02         ; type code = Integer
+              cp    0x25           ; next character = '%' ?
+              ret   z              ; yes, done
+              inc   d              ; type code = String
+              cp    0x24           ; next character = '$' ?
+              ret   z              ; yes, done
+              nop                  ; 9 x NOP
+              nop   
+              nop   
+              nop   
+              nop   
+              nop   
+              nop   
+              nop   
+              nop   
+
+; Take type code from table
+; GET_TYPE_FROM_TABLE: (defined in symbols.sym)
+              ld    a,b            ; Position of 1st letter in
+; alphabet
+              sub   0x41
+              and   0x7F           ; clear bit 7
+              ld    e,a            ; as table offset in DE
+              ld    d,0x00
+              push  hl             ; save program pointer
+              ld    hl,0x7901      ; beginning of type code table addr.
+              add   hl,de          ; + Offset
+              ld    d,(hl)         ; load type code from table
+              pop   hl             ; reload program pointer
+              dec   hl             ; -1, as no explicit type specification
+              ret                  ; continue at 2652H
+              ld    a,d            ; transfer type code to type byte
+              ld    (VALTYP),a     ; (78AFH), A
+
+; Search for variable in variable table
+; SEARCH_VAR_TABLE: (defined in symbols.sym)
+              rst   0x10           ; address next character
+              ld    a,(0x78DC)     ; Indexing locked ?
+              or    a              ; (for loop variable)
+              jp    nz,0x2664      ; yes!
+              ld    a,(hl)
+              sub   0x28           ; = '(' ?
+              jp    z,ARYMN        ; yes, indexed variable
+              xor   a              ; unlock indexing
+              ld    (0x78DC),a
+              push  hl             ; program pointer on stack
+              push  de             ; type code on stack
+              ld    hl,(0x78F9)    ; load beginning of variable table
+@L11:
+              ex    de,hl
+              ld    hl,(ARYTAB)    ; load end of variable table
+              rst   0x18           ; Addresses equal?
+              pop   hl             ; type code in H
+              jr    z,VAR_NOT_FOUND ; yes, variable not found
+              ld    a,(de)         ; load type from variable table
+              ld    l,a            ; = type of variable being sought ?
+              cp    h              ; no, next variable
+              inc   de
+              jr    nz,@L10        ; address Var.Table + 1
+              ld    a,(de)         ; load 2nd character from table
+              cp    c              ; = 2nd character of variable?
+              jr    nz,@L10        ; no, next variable
+              inc   de             ; address Var.Table + 1
+              ld    a,(de)         ; load 1st character from table
+              cp    b              ; = 1st character of variable?
+              jp    z,0x26CC       ; yes, variable found!
+              DEFB  0x3E           ; LD A, 0x13 dummy command
+@L10:
+              inc   de             ; address Var.Table at 1st character
+              inc   de             ; address Var.Table at value
+              push  hl             ; type of sought variable on stack
+              ld    h,0x00         ; address of Var.Table
+              add   hl,de          ; + length of type = next entry
+              jr    @L11           ; search further
+
+; Variable not contained in variable table
+; VAR_NOT_FOUND: (defined in symbols.sym)
+              ld    a,h            ; Typ in A
+              pop   hl             ; load program pointer
+              ex    (sp),hl        ; swap with return address
+              push  af             ; type on stack
+              push  de             ; end address of Var.Tab. on stack
+              ld    de,0x24F1      ; return address = 24F1H?
+              rst   0x18           ; (from VARPTR)
+              jr    z,VARPTR_NOT_FOUND ; yes, continue at 26CFH
+              ld    de,0x2543      ; return address = 2543H?
+              rst   0x18           ; (from expression analysis)
+              pop   de             ; reload Var.Tab. end address
+              jr    z,EXPR_VAR_NOT_FOUND ; yes, continue at 26D5H
+
+; Set up new variable
+; CREATE_NEW_VAR: (defined in symbols.sym)
+              pop   af             ; load type
+
+; return address on stack
+; load program pointer
+              ex    (sp),hl        ; load program pointer
+              push  hl             ; program pointer on the stack
+              push  bc             ; variable name on the stack
+              ld    c,a            ; type in C
+              ld    b,0x00         ; B=0, i.e. BC contains length of value
+              push  bc             ; length on the stack
+              inc   bc             ; + 3
+              inc   bc
+              inc   bc             ; = total length of Var.Tab entry
+              ld    hl,(STREND)    ; starting address of free memory
+              push  hl             ; on the stack
+              add   hl,bc          ; + total length Var.Tab entry
+              pop   bc             ; load value length
+              push  hl             ; new starting address free memory on stack
+              call  MAKE_SPACE     ; move array table to make room for new variable
+              pop   hl             ; reload starting address free memory
+              ld    (STREND),hl    ; and save
+              ld    h,b            ; new starting address array table in HL
+              ld    l,c
+              ld    (ARYTAB),hl    ; and save
+@L12:
+              dec   hl             ; delete new Var.Tab entry
+              ld    (hl),0x00      ; (DE = Var.Tab-Adr of the variables)
+              rst   0x18           ; done ?
+              jr    nz,@L12        ; no, next byte
+              pop   de             ; load type in E
+              ld    (hl),e         ; enter in variable table
+              inc   hl             ; Tabellenadresse + 1
+              pop   de             ; get name from stack
+              ld    (hl),e         ; 2nd character in Var.Table
+              inc   hl             ; Tabellenadresse + 1
+              ld    (hl),d         ; 1st character in Var.Table
+              ex    de,hl          ; address Var.Table in DE
+              inc   de             ; + 1 = address for value entry
+              pop   hl             ; load program pointer
+              ret                  ; done
+
+; at VARPTR variable not in table
+; VARPTR_NOT_FOUND: (defined in symbols.sym)
+              ld    d,a            ; Var.Tab address in DE = 0
+              ld    e,a
+              pop   af             ; fix stack
+              pop   af
+
+; return address on stack
+; load program pointer
+              ex    (sp),hl        ; load program pointer
+              ret                  ; back to VARPTR routine
+
+; at expression analysis variable not in table
+; EXPR_VAR_NOT_FOUND: (defined in symbols.sym)
+              ld    (FAC),a        ; X = 0 for single and double precision
+              pop   bc             ; fix stack
+              ld    h,a            ; HL = 0 for Integer
+              ld    l,a
+              ld    (FACLO),hl     ; and also enter in X
+              rst   0x20           ; determine type
+              jr    nz,@L13        ; String? no-jump
+              ld    hl,0x1928      ; string pointer to empty string
+              ld    (FACLO),hl     ; enter in X
+@L13:
+              pop   hl             ; load program pointer
+              ret                  ; back to expression analysis (2 stages)
+
+; Matrix Management
+ARYMN:
+              push  hl             ; Save program pointer on stack
+              ld    hl,(DIMFLG)    ; Load DIM flag and type
+              ex    (sp),hl        ; Swap with program pointer
+              ld    d,a            ; DIM counter = 0
+@L1:
+              push  de             ; DIM counter on stack
+              push  bc             ; Variable name on stack
+
+; result: Result (<32768) in DE
+              call  GETVAL         ; Evaluate indexing
+              pop   bc             ; Load variable name
+              pop   af             ; DIM counter in A
+              ex    de,hl          ; Index value in HL
+              ex    (sp),hl        ; Swap with DIM flag on stack
+              push  hl             ; DIM flag and type on stack
+              ex    de,hl          ; Index pointer in HL
+              inc   a              ; DIM counter + 1
+              ld    d,a            ; and in D
+              ld    a,(hl)         ; Load character
+              cp    0x2C           ; Does a comma follow?
+              jr    z,@L1          ; Yes, next index value
+              rst   8              ; Does a ')' follow?
+              add   hl,hl
+              ld    (SAVP),hl      ; Save program pointer
+              pop   hl             ; Load DIM flag and type
+              ld    (DIMFLG),hl    ; and save
+              push  de             ; DIM counter on stack
+              ld    hl,(ARYTAB)    ; Address start of matrix table
+              DEFB  0x3E           ; Dummy instruction
+@L4:
+              add   hl,de          ; Add matrix length to table pointer
+              ex    de,hl          ; Address of matrix table in HL
+              ld    hl,(STREND)    ; Load start address of free memory
+              ex    de,hl          ; Swap addresses
+              rst   0x18           ; Addresses equal?
+              ld    a,(VALTYP)     ; Load type
+              jr    z,ARYINI       ; Yes, matrix not found!
+              cp    (hl)           ; Type = with table entry?
+              inc   hl             ; Table address + 1
+              jr    nz,@L2         ; No, next table entry
+              ld    a,(hl)         ; 2nd character of name from table
+              cp    c              ; = 2nd character of searched matrix?
+              inc   hl             ; Table address + 1
+              jr    nz,@L3         ; No, next table entry
+              ld    a,(hl)         ; 1st character of name from table
+              cp    b              ; = 1st character of searched matrix?
+              DEFB  0x3E           ; Dummy instruction
+@L2:
+              inc   hl             ; Table address + 1
+@L3:
+              inc   hl             ; Table address + 1
+              ld    e,(hl)         ; Load matrix length
+              inc   hl             ; Table address + 1
+              ld    d,(hl)
+              inc   hl             ; Table address + 1
+              jr    nz,@L4         ; Character unequal! Next table entry
+
+; Matrix Found
+ARYFND:
+              ld    a,(DIMFLG)     ; DIM flag set?
+              or    a
+              ld    e,0x12         ; Error code in E
+              jp    nz,ERROR_HANDLER ; Yes, REDIMENSIONED ARRAY - Error
+              pop   af             ; Load DIM counter
+              sub   (hl)           ; Number of dimensions in found matrix?
+              jp    z,ARYADR       ; Yes, continue at 2795H
+              ld    e,0x10         ; No, SUBSCRIPT OUT OF RANGE - Error
+              jp    ERROR_HANDLER  ; To error output routine
+
+; Setup New Matrix
+ARYINI:
+              ld    (hl),a         ; Save type
+              inc   hl             ; Table address + 1
+              ld    e,a            ; Length of an element (=type) in DE
+              ld    d,0x00
+              pop   af             ; Load DIM counter
+              ld    (hl),c         ; 2nd character matrix name in table
+              inc   hl             ; Table address + 1
+              ld    (hl),b         ; 1st character matrix name in table
+              inc   hl             ; Table pointer + 1
+              ld    c,a            ; DIM counter in C
+              call  CHECK_FREE_MEMORY ; Still 2*DIM counter bytes free?
+              inc   hl             ; Table address + 2
+              inc   hl             ; Behind length entry
+              ld    (FMT_FLAG),hl  ; Save table address
+              ld    (hl),c         ; DIM counter in table
+              inc   hl             ; Table address + 1
+              ld    a,(DIMFLG)     ; Shift DIM flag into Carry
+              rla   
+              ld    a,c            ; DIM counter in A
+@L2:
+              ld    bc,ROMRET      ; Dimension = 11 (Standard)
+              jr    nc,@L1         ; No DIM, jump
+              pop   bc             ; Dimension from stack in BC
+              inc   bc             ; + 1 for 0-index
+@L1:
+              ld    (hl),c         ; Enter in table
+              inc   hl             ; Table address + 1
+              ld    (hl),b
+              inc   hl             ; Table address + 1
+              push  af             ; DIM counter on stack
+              call  UMULT          ; Last matrix value length * dimension
+              pop   af             ; Load DIM counter
+              dec   a              ; - 1
+              jr    nz,@L2         ; Further dimensions? Yes - jump
+              push  af             ; DIM flag (Carry) on stack
+              ld    b,d            ; Matrix value length in BC
+              ld    c,e
+
+; (now on 1st value byte)
+              ex    de,hl          ; To table address
+              add   hl,de          ; Add
+              jr    c,$-55         ; Overflow, SUBSCRIPT OUT OF RANGE
+
+; no, OUT OF MEMORY - Error
+              call  0x196C         ; Sufficient memory free?
+              ld    (STREND),hl    ; New start address 'free memory'
+@L3:
+              dec   hl             ; Delete matrix values
+              ld    (hl),0x00      ; By writing 00
+              rst   0x18           ; Value start address reached?
+              jr    nz,@L3         ; No, next byte
+              inc   bc             ; Matrix value length +1 (for DIM counter)
+              ld    d,a            ; D = 0
+              ld    hl,(FMT_FLAG)  ; Load address of DIM counter
+              ld    e,(hl)         ; DIM counter in E
+              ex    de,hl          ; and in HL
+              add   hl,hl          ; DIM counter * 2
+              add   hl,bc          ; + matrix value length
+              ex    de,hl          ; = Matrix length (in DE)
+              dec   hl             ; Table address - 2
+              dec   hl
+
+; matrix length enter in table
+              ld    (hl),e         ; = Pointer to length field
+              inc   hl             ; Table address + 1
+              ld    (hl),d
+              inc   hl             ; Table address + 1
+              pop   af             ; Load DIM flag
+              jr    c,$+50         ; DIM? Yes - done
+
+; Determine Address of Matrix Element
+ARYADR:
+              ld    b,a            ; Set matrix offset = 0
+              ld    c,a            ; in BC
+              ld    a,(hl)         ; Number of dimensions in A
+              inc   hl             ; Table pointer on 1st dimension
+              DEFB  0x16           ; Dummy instruction
+@L1:
+              pop   hl             ; Load table address
+              ld    e,(hl)         ; Load dimension
+              inc   hl             ; Table pointer + 1
+              ld    d,(hl)
+              inc   hl             ; Table pointer + 1
+
+; Index load
+              ex    (sp),hl        ; Table pointer on the stack
+              push  af             ; DIM counter on the stack
+              rst   0x18           ; Index >= Dimension?
+              jp    nc,0x273D      ; Yes, SUBSCRIPT OUT OF RANGE - Error
+              call  UMULT          ; Matrix offset * Dimension
+              add   hl,de          ; + Index = new matrix offset
+              pop   af
+              dec   a              ; All dimensions processed?
+              ld    b,h            ; New matrix offset in BC
+              ld    c,l
+              jr    nz,@L1         ; Yet further dimensions, back
+              ld    a,(VALTYP)     ; Load type (= value length)
+              ld    b,h            ; New matrix offset in BC
+              ld    c,l
+              add   hl,hl          ; Matrix offset * 2
+              sub   0x04           ; String or Integer?
+              jr    c,@L2          ; Yes!
+              add   hl,hl          ; Matrix offset * 4
+              jr    z,@L3          ; Single precision? Yes - jump
+              add   hl,hl          ; Matrix offset * 8 (double precision)
+@L2:
+              or    a              ; Integer or double precision?
+              jp    po,0x27C2      ; Yes!
+              add   hl,bc          ; String, 3 * matrix offset in HL
+@L3:
+              pop   bc             ; Load value start address
+              add   hl,bc          ; Add matrix offset
+              ex    de,hl          ; = element address, transfer in DE
+              ld    hl,(SAVP)      ; Load program pointer
+              ret                  ; Done
+
+; MEM Function
+; Determine size of free memory
+MEM:
+              xor   a              ; Type byte = 0 (no string!)
+              push  hl             ; Program pointer on stack
+              ld    (VALTYP),a
+              call  FRE            ; Call FRE
+              pop   hl             ; Load program pointer
+              rst   0x10           ; Address next character
+              ret                  ; done
+
+; FRE Function
+; Determine size of free memory or free string space
+FRE:
+              ld    hl,(STREND)    ; Starting address of free memory
+              ex    de,hl          ; in DE
+              ld    hl,START       ; Stack pointer in HL
+              add   hl,sp          ; Test type. String?
+              rst   0x20
+              jr    nz,@L1         ; no!
+              call  0x29DA         ; Remove argument from temporary buffer and string space
+              call  0x28E6         ; Reorder string space, remove redundant strings
+              ld    hl,(STKTOP)    ; String space start - 1
+              ex    de,hl          ; in DE
+              ld    hl,(FRETOP)    ; Last free byte of the string space
+@L1:
+              ld    a,l            ; Difference between HL and DE
+              sub   e              ; = Size of free memory or free string space
+              ld    l,a
+              ld    a,h            ; (MSB)
+              sbc   a,d
+              ld    h,a
+              jp    INEG_OVERFLOW  ; HL with single precision in X, done
+
+; POS Function
+; Determines the cursor position
+POS:
+              ld    a,(TTYPOS)     ; Load cursor position
+              ld    l,a            ; Number in L
+              xor   a              ; A = 0
+              ld    h,a            ; H = 0
+              jp    MAKINT         ; HL as integer in X
+
+; USR Function
+; Call a machine language routine
+; The argument in X and the type in A are passed as parameters
+; and for strings, the address of the string is passed in DE.
+USR:
+              call  0x79A9         ; RAM expansion exit
+              rst   0x10           ; Next character in the program
+              call  0x252C         ; Evaluate argument (in X)
+              push  hl             ; Program pointer on the stack
+              ld    hl,0x0890      ; Return address on the stack
+              push  hl             ; Load type of argument
+              ld    a,(VALTYP)
+              push  af             ; on the stack
+              cp    0x03           ; is string?
+              call  z,0x29DA       ; yes, remove last string from temporary buffer and string space
+              pop   af             ; Reload type
+              ex    de,hl          ; String address in DE
+              ld    hl,(0x788E)    ; Start address of the machine language routine
+              jp    (hl)           ; Jump to routine
+
+; Convert value to desired type
+CONVRT:
+              push  hl             ; HL on the stack
+              and   0x07           ; Type=double precision, 0 as table offset
+              ld    hl,0x18A1      ; Jump table for type conversion
+              ld    c,a            ; Table offset (=type, except for double)
+              ld    b,0x00         ; in BC
+              add   hl,bc          ; Add to jump table start
+              call  0x2586         ; Add again, load address and jump
+              pop   hl             ; Restore HL
+              ret                  ; done
+
+; Check if execution is in DIRECT mode.
+; if so, ILLEGAL DIRECT OPERATION - Error
+DIRCHK:
+              push  hl             ; Program pointer on the stack
+              ld    hl,(0x78A2)    ; Load current line number
+              inc   hl             ; (FFFF = ?)
+              ld    a,h            ; (=Direct mode)
+              or    l
+              pop   hl             ; Load program pointer
+              ret   nz             ; no, return
+              ld    e,0x16         ; Error code in E
+              jp    ERROR_HANDLER  ; Display ILLEGAL DIRECT OPERATION
+
+; STR$ Function
+; Convert number to string
+STRS:
+              call  PUSTR_UNFORM_INIT ; Convert number to string
+              call  STRFDESC       ; Take string into temporary buffer and X
+              call  0x29DA         ; Remove string from temporary buffer
+              ld    bc,0x2A2B      ; Set return address
+              push  bc             ; BC
+              ld    a,(hl)         ; String length in A
+              inc   hl             ; HL
+              push  hl             ; String pointer on the stack
+              call  STR_RES_SPACE  ; Reserve space for string in string space
+              pop   hl             ; Load string pointer
+              ld    c,(hl)         ; Load string address
+              inc   hl             ; (in BC)
+              ld    b,(hl)         ; BC
+              call  0x285A         ; Transfer address in string space to temporary buffer
+              push  hl             ; Temporary buffer address on stack
+              ld    l,a            ; String length in L
+              call  0x29CE         ; Transfer string to string space
+              pop   de             ; Load temporary buffer address
+              ret                  ; Temporary buffer in X, done
+
+; Determine address in string space and store in temporary buffer
+STRINI:
+              call  STR_RES_SPACE  ; Reserve space in string space
+              ld    hl,DSCTMP      ; Addr. of the temporary buffer
+              push  hl             ; on the stack
+              ld    (hl),a         ; Enter string length
+              inc   hl             ; Temporary buffer addr. + 1
+              ld    (hl),e         ; Enter string address
+              inc   hl
+              ld    (hl),d
+              pop   hl             ; Load address of temporary buffer
+              ret                  ; done
+
+; Take string constant into temporary buffer and X
+STRFDESC:
+              dec   hl             ; String pointer - 1
+              ld    b,0x22         ; Delimiter 1 = '\
+              ld    d,b            ; = Delimiter 2
+; STR_TO_FAC: (defined in symbols.sym)
+              push  hl             ; String pointer - 1 on stack
+              ld    c,0xFF         ; Character counter = -1
+@L2:
+              inc   hl             ; String pointer + 1
+              ld    a,(hl)         ; Load character
+              inc   c              ; Character counter + 1
+              or    a              ; End of line?
+              jr    z,@L1          ; yes, end of string
+              cp    d              ; = Delimiter 2?
+              jr    z,@L1          ; yes, end of string
+              cp    b              ; Delimiter 1?
+              jr    nz,@L2         ; no, next character
+@L1:
+              cp    0x22           ; Last character '\
+              call  z,CHRGTR       ; yes, next character
+              ex    (sp),hl        ; Load string pointer - 1, current string pointer on stack
+              inc   hl             ; String pointer + 1
+              ex    de,hl          ; in DE
+              ld    a,c            ; String length in A
+              call  0x285A         ; String in temporary buffer
+              ld    de,DSCTMP      ; Addr. of the temporary buffer
+              DEFB  0x3E           ; LD A, 0D5H dummy command
+              push  de             ; Load string pointer in DE
+              ld    hl,(TEMPPT)    ; Load current temporary buffer address
+              ld    (FACLO),hl     ; Enter in X
+              ld    a,0x03         ; Set type = String
+              ld    (VALTYP),a
+              call  VMOVE          ; Transfer temporary buffer to next temporary buffer location
+              ld    de,FRETOP      ; Temporary buffer full?
+              rst   0x18           ; RST 18H
+              ld    (TEMPPT),hl    ; Store next temporary buffer addr.
+              pop   hl             ; Load program pointer
+              ld    a,(hl)         ; Load next character
+              ret   nz             ; Temp. buffer not full, done
+
+; STRING FORMULA TOO COMPLEX - Error
+STCPERR:
+              ld    e,0x1E         ; Error code in E
+              jp    ERROR_HANDLER  ; Display error message
+
+; Print string
+; String terminated by '\
+STROUT:
+              inc   hl             ; String address + 1
+; OUTSTR: (defined in symbols.sym)
+              call  STRFDESC       ; String in temporary buffer + X
+              call  0x29DA         ; Remove string from temporary buffer
+              call  GETBCD         ; String addr. in BC, length in D
+              inc   d              ; String length + 1
+@L1:
+              dec   d              ; All characters displayed?
+              ret   z              ; yes, done
+              ld    a,(bc)         ; Load character
+              call  CHAR_OUTPUT_DISPATCH ; and display
+              cp    0x0D           ; Carriage Return?
+              call  z,0x2103       ; yes, back via RAM output 79D0H
+              inc   bc             ; String address + 1
+              jr    @L1            ; Next character
+
+; Reserve space for a string in string space
+STR_RES_SPACE:
+              or    a              ; Clear PACK flag
+              DEFB  0x0E           ; LD C, 0F1H dummy command
+              pop   af             ; Load PACK flag from stack
+              push  af             ; on the stack
+              ld    hl,(STKTOP)    ; Start of the string space - 1
+              ex    de,hl          ; in DE
+              ld    hl,(FRETOP)    ; Pointer to 1st free byte in string space
+              cpl                  ; Complement string length
+              ld    c,a            ; and in BC
+              ld    b,0xFF         ; LD B, 0FFH
+              add   hl,bc          ; String space pointer - length
+              inc   hl             ; + 1 (result correction)
+              rst   0x18           ; Start of the string space - 1?
+              jr    c,GARBAG       ; yes, pack string space
+              ld    (FRETOP),hl    ; Store new string space pointer
+              inc   hl             ; + 1 = string address in string area
+              ex    de,hl          ; transfer to DE
+              pop   af             ; reload string length
+              ret                  ; done
+
+; Pack string area
+GARBAG:
+              pop   af             ; Load PACK flag
+              ld    e,0x1A         ; Error code in E
+              jp    z,ERROR_HANDLER ; already packed, OUT OF STRING SPACE
+              cp    a              ; Set PACK flag
+              push  af             ; and push to stack
+              ld    bc,0x28C1      ; Set return address
+              push  bc             ; try again after packing, if enough space available.
+              ld    hl,(MEMSIZ)    ; String area pointer = RAM end address
+              ld    (FRETOP),hl
+              ld    hl,START       ; Highest string pointer = 0
+              push  hl             ; onto stack
+              ld    hl,(STKTOP)    ; Highest string = Start of string area
+              push  hl             ; onto stack
+
+; Search for highest string in temporary storage
+              ld    hl,TEMPST      ; Start of temporary storage in HL
+              ex    de,hl
+              ld    hl,(TEMPPT)    ; Address of next free temporary
+              ex    de,hl          ; storage space in DE
+              rst   0x18           ; Temporary storage processed?
+              ld    bc,0x28F7      ; Return address for
+              jp    nz,CHK_HI_STR  ; no, update highest string
+
+; Search for highest string in simple variables
+              ld    hl,(0x78F9)    ; Starting address of variable table in HL
+@L2:
+              ex    de,hl          ; End address of variable table in DE
+              ld    hl,(ARYTAB)
+              ex    de,hl
+              rst   0x18           ; End of variable table?
+              jr    z,$+21         ; yes, investigate matrices
+              ld    a,(hl)         ; Load type from variable table
+              inc   hl             ; Var table address to value
+              inc   hl
+              inc   hl
+              cp    0x03
+              jr    nz,@L1
+              call  UPD_HI_STR     ; Update highest string
+              xor   a              ; A = 0, so that pointer is not incremented
+@L1:
+              ld    e,a            ; Transfer type to DE
+              ld    d,0x00
+              add   hl,de          ; Var table address + type (length)
+              jr    @L2            ; Next entry
+
+; Search for highest string in matrix table
+FIND_HI_STR_ARY:
+              pop   bc             ; Correct stack
+@L1:
+              ex    de,hl
+              ld    hl,(STREND)    ; End address of matrix table in DE
+              ex    de,hl
+              rst   0x18           ; End reached?
+              jp    z,MOV_HI_STR   ; yes, highest string to next higher position in the string area
+              ld    a,(hl)         ; Load matrix type
+              inc   hl             ; Table address + 1
+              call  MOVRM          ; Matrix length in BC
+              push  hl             ; Table address on stack
+              add   hl,bc          ; + Matrix length = start of next matrix
+              cp    0x03           ; String matrix?
+              jr    nz,FIND_HI_STR_ARY ; no, next matrix
+              ld    (FMT_FLAG),hl  ; Save address of next matrix
+              pop   hl             ; Load DIM counter address
+              ld    c,(hl)         ; Load DIM counter
+              ld    b,0x00
+              add   hl,bc          ; add to DIM counter address twice
+              add   hl,bc
+              inc   hl             ; + 1 = Value address of the matrix
+              ex    de,hl
+              ld    hl,(FMT_FLAG)  ; Address of next matrix in DE
+              ex    de,hl
+              rst   0x18           ; Matrix fully processed?
+              jr    z,@L1          ; yes, next matrix
+              ld    bc,0x293F      ; no, load return address
+
+; Compare string with the highest string so far, and replace if higher in 
+; string space.
+CHK_HI_STR:
+              push  bc             ; Return address on stack
+UPD_HI_STR:
+              xor   a              ; String length = 0?
+              or    (hl)
+              inc   hl             ; String pointer to string address
+              ld    e,(hl)         ; Load string address
+              inc   hl
+              ld    d,(hl)
+              inc   hl             ; String pointer + 1
+              ret   z              ; String length = 0, done!
+              ld    b,h            ; String pointer in BC
+              ld    c,l
+              ld    hl,(FRETOP)    ; String address > String area pointer?
+              rst   0x18           ; (String already re-sorted)
+              ld    h,b            ; String pointer back in HL
+              ld    l,c
+              ret   c              ; yes, done!
+              pop   hl             ; Return address in HL
+              ex    (sp),hl        ; Load address of the highest string
+              rst   0x18           ; String under investigation higher than highest string?
+              ex    (sp),hl        ; Address of the highest string onto stack, load return address
+              push  hl             ; Return address back on stack
+              ld    h,b            ; String pointer back in HL
+              ld    l,c
+              ret   nc             ; no, done!
+              pop   bc             ; Return address in BC
+              pop   af             ; Get address and pointer of highest string from stack
+              pop   af
+              push  hl             ; Pointer and address of the currently investigated string
+              push  de             ; as new highest string onto stack
+              push  bc             ; Return address on stack
+              ret                  ; done
+
+; Sort the highest string
+MOV_HI_STR:
+              pop   de             ; Load address of the highest string
+              pop   hl             ; Pointer of the highest string in HL
+              ld    a,l            ; Pointer = 0?
+              or    h              ; (all strings sorted)
+              ret   z              ; yes, done!
+              dec   hl             ; String pointer to string address
+              ld    b,(hl)         ; Load string address
+              dec   hl
+              ld    c,(hl)
+              push  hl             ; String pointer on the stack
+              dec   hl             ; Load string length
+              ld    l,(hl)         ; in HL
+              ld    h,0x00
+              add   hl,bc          ; + String address
+              ld    d,b            ; String address in DE
+              ld    e,c
+              dec   hl             ; HL = end of string
+              ld    b,h            ; in BC
+              ld    c,l
+              ld    hl,(FRETOP)    ; Load pointer to string area
+              call  0x1958         ; copy string below the string area pointer
+              pop   hl             ; Load string pointer again
+              ld    (hl),c         ; Store new string address
+              inc   hl
+              ld    (hl),b
+              ld    l,c
+              ld    h,b
+              dec   hl             ; - 1 = new string area pointer
+              jp    0x28E9         ; Store and continue
+
+; String concatenation
+; STR_CONCAT: (defined in symbols.sym)
+              push  bc             ; Last priority on stack
+              push  hl             ; Program pointer on stack
+              ld    hl,(FACLO)     ; 1st string pointer in HL
+              ex    (sp),hl        ; Load program pointer, 1st string pointer on stack
+              call  EVAL_OPERAND   ; Determine 2nd operand
+              ex    (sp),hl        ; Program pointer on stack, 1st string pointer load
+              call  CHKSTR         ; 2nd operand string? no - TM error
+              ld    a,(hl)         ; Load 1st string length
+              push  hl             ; 1st string pointer on the stack
+              ld    hl,(FACLO)     ; Load 2nd string pointer
+              push  hl             ; and also on the stack
+              add   a,(hl)         ; Add string lengths
+              ld    e,0x1C         ; Error code in E
+              jp    c,ERROR_HANDLER ; > 256? yes - STRING TOO LONG error
+              call  STRINI         ; Allocate space for linked string, enter in temp storage
+              pop   de             ; Load 2nd string pointer
+              call  REM_STR_TOP    ; remove 2nd string from temp storage
+              ex    (sp),hl        ; 1st string pointer on stack, load 1st string pointer
+              call  0x29DD         ; remove 1st string from temp storage
+              push  hl             ; 1st string pointer on the stack
+              ld    hl,(0x78D4)    ; String address from temp storage 1.
+              ex    de,hl          ; in DE
+              call  MOV_STR_TO_AREA ; Transfer 1st string into string area
+              call  MOV_STR_TO_AREA ; Transfer 2nd string into string area
+              ld    hl,0x2349      ; Load return address
+              ex    (sp),hl        ; Swap with program pointer
+              push  hl
+              jp    0x2884         ; Temp storage in X and transfer storage
+
+; Transfer string to string area
+MOV_STR_TO_AREA:
+              pop   hl             ; Load return address
+              ex    (sp),hl        ; Load string pointer, return address on stack
+              ld    a,(hl)         ; Load string length
+              inc   hl             ; String pointer + 1
+              ld    c,(hl)         ; Load string address
+              inc   hl
+              ld    b,(hl)
+              ld    l,a            ; String length in L
+              inc   l              ; + 1
+@L1:
+              dec   l              ; String length - 1, = 0?
+              ret   z              ; yes, done!
+              ld    a,(bc)         ; One character in string area
+              ld    (de),a
+              inc   bc             ; String pointer + 1
+              inc   de             ; String area address + 1
+              jr    @L1            ; next byte
+
+; Remove string from temporary storage and string area
+REM_STR_TMP:
+              call  CHKSTR         ; not a string in X? yes - TYPE MISMATCH
+              ld    hl,(FACLO)     ; Load string pointer from X
+              ex    de,hl          ; in DE
+REM_STR_TOP:
+              call  REM_STR_TMP_ENTRY ; String at top of temp storage? yes - remove!
+              ex    de,hl          ; String pointer in HL
+              ret   nz             ; not removed? done!
+
+; Remove string from string area
+REM_STR_AREA:
+              push  de             ; String pointer to stack
+              ld    d,b            ; String address in DE
+              ld    e,c
+              dec   de             ; - 1
+              ld    c,(hl)         ; String length in C
+              ld    hl,(FRETOP)    ; String area pointer in HL
+              rst   0x18           ; = String address - 1 ?
+              jr    nz,@L1         ; no, done!
+              ld    b,a            ; B = 0
+              add   hl,bc          ; String area pointer + length
+              ld    (FRETOP),hl    ; = new string area pointer
+@L1:
+              pop   hl             ; reload string pointer
+              ret   
+
+; Remove string from temporary storage
+REM_STR_TMP_ENTRY:
+              ld    hl,(TEMPPT)    ; load next temporary storage address
+              dec   hl             ; - 1
+              ld    b,(hl)         ; load address of last string
+              dec   hl
+              ld    c,(hl)         ; load string length in C
+              dec   hl
+              rst   0x18           ; = string pointer
+              ret   nz             ; no!
+              ld    (TEMPPT),hl    ; store new pointer
+              ret                  ; last entry is deleted
+
+; LEN function - determines the length of a string
+FNLEN:
+              ld    bc,0x27F8      ; set return address
+              push  bc
+              call  REM_STR_TMP    ; remove argument string from temporary storage + string area
+              xor   a              ; D = 0
+              ld    d,a
+              ld    a,(hl)         ; load string length
+              or    a              ; and test
+              ret                  ; continue at 27FBH
+
+; ASC function - determines ASCII code of 1st character of a string
+FNASC:
+              ld    bc,0x27F8      ; set return address
+              push  bc
+              call  0x2A07         ; string length = 0 ?
+              jp    z,0x1E4A       ; yes, FUNCTION CODE - Error
+              inc   hl             ; string pointer to string address
+              ld    e,(hl)         ; load string address
+              inc   hl
+              ld    d,(hl)
+              ld    a,(de)         ; load 1st character
+              ret                  ; continue at 27F8H
+
+; CHR$ function - Creates a 1-byte string from the argument (ASCII-Code)
+FNCHR:
+              ld    a,0x01         ; string length = 1
+              call  STRINI         ; reserve space in string area and enter in temporary storage
+              call  0x2B1F         ; integer value of argument in E
+              ld    hl,(0x78D4)    ; string address from temporary storage 1.
+              ld    (hl),e         ; store character there
+              pop   bc             ; remove return address
+              jp    0x2884         ; transfer temporary storage to X and into temporary storage
+
+; STRING$ function - creates a string from n same characters
+FNSTR_DOLLAR:
+              rst   0x10           ; next character
+              rst   8              ; followed by '(' ?
+              DEFB  0x28
+              call  GETBYT         ; evaluate string length and in E
+              push  de             ; string length on stack
+              rst   8              ; followed by a comma ?
+              DEFB  0x2C
+              call  0x2337         ; evaluate character expression
+              rst   8              ; followed by ')' ?
+              DEFB  0x29
+              ex    (sp),hl        ; load string length in L, program pointer on stack
+              push  hl             ; string length back on stack
+              rst   0x20           ; character expression = string ?
+              jr    z,@L1          ; yes!
+              call  0x2B1F         ; no, integer value in A
+              jr    @L2            ; continue at 2A4AH
+@L1:
+              call  0x2A13         ; 1st character of string in A
+@L2:
+              pop   de             ; string length in E
+              push  af             ; character 2x on stack
+              push  af
+              ld    a,e            ; reserve space in string area
+              call  STRINI         ; string in temporary storage
+              ld    e,a            ; string length in E
+              pop   af             ; reload character
+              inc   e              ; string length = 0 ?
+              dec   e
+              jr    z,$-42         ; yes, temporary storage in temporary storage + X
+              ld    hl,(0x78D4)    ; load string address
+@L3:
+              ld    (hl),a         ; transfer character
+              inc   hl             ; string area address + 1
+              dec   e              ; string length - 1, = 0 ?
+              jr    nz,@L3         ; no, next character!
+              jr    $-52           ; temporary storage in temporary storage and X
+
+; LEFT$ function - separates left part of a string
+FNLEFT:
+              call  L_R_M_SUB      ; program pointer in HL, test ')', 2nd argument in B
+              xor   a              ; Left-Offset = 0 (for RIGHT$ and MID$)
+              ex    (sp),hl        ; program pointer on stack, load string pointer
+              ld    c,a            ; Left-Offset in C
+              DEFB  0x3E
+              push  hl
+              push  hl             ; string pointer on stack
+              ld    a,(hl)         ; load string length
+              cp    b              ; < 2nd argument?
+              jr    c,@L1          ; yes, result string length = string length
+              ld    a,b            ; no, result string length = 2nd argument
+              DEFB  0x11
+@L1:
+              ld    c,0x00         ; Left-Offset = 0
+              push  bc             ; Left-Offset on stack
+              call  STR_RES_SPACE  ; reserve space for result in string area.
+              pop   bc             ; reload Left-Offset
+              pop   hl             ; load string pointer
+              push  hl             ; and back on stack
+              inc   hl             ; string length again on stack
+              ld    b,(hl)         ; load string address in HL
+              inc   hl
+              ld    h,(hl)
+              ld    l,b
+              ld    b,0x00         ; add Left-Offset to string address
+              add   hl,bc
+              ld    b,h            ; result string address in BC
+              ld    c,l
+              call  0x285A         ; result string in temporary storage.
+              ld    l,a            ; result string length in L
+              call  0x29CE         ; result string in string area
+              pop   de             ; string pointer in DE
+              call  REM_STR_TOP    ; remove argument string from temporary storage and delete from s
+              jp    0x2884         ; temporary storage in temporary storage + X
+
+; RIGHT$ function - separates right part of a string
+FNRIGHT:
+              call  L_R_M_SUB      ; program pointer in HL, test ')', 2nd argument in B
+              pop   de             ; load string pointer
+              push  de             ; and back on stack
+              ld    a,(de)         ; load string length
+              sub   b              ; -= 2nd argument = Left-Offset
+              jr    $-51           ; continue at LEFT$
+
+; MID$ function - separates middle part of a string
+FNMID:
+              ex    de,hl          ; program pointer in HL
+              ld    a,(hl)         ; load character
+              call  0x2AE2         ; 2nd argument in B
+              inc   b              ; 2nd argument = 0 ?
+              dec   b
+              jp    z,0x1E4A       ; yes, FUNCTION CODE - Error
+              push  bc             ; 2nd argument on the stack
+              ld    e,0xFF         ; 3rd argument = 255 (default = rest string)
+              cp    0x29           ; ')' as conclusion of parameters?
+              jr    z,@L1          ; yes, only 2 arguments
+              rst   8              ; no, followed by a comma ?
+              DEFB  0x2C
+              call  GETBYT         ; evaluate 3rd argument (in E)
+@L1:
+              rst   8              ; now ')' must follow
+              DEFB  0x29
+              pop   af             ; load 2nd argument into A
+              ex    (sp),hl        ; program pointer on stack, load string pointer
+              ld    bc,0x2A69      ; set return address
+              push  bc             ; (jump to LEFT$)
+              dec   a              ; 2nd arg. - 1 = Left-Offset
+              cp    (hl)           ; string length < 2nd argument ?
+              ld    b,0x00         ; result string length = 0
+              ret   nc             ; yes, result string is empty
+              ld    c,a            ; Left-Offset in C
+              ld    a,(hl)         ; load string length
+              sub   c              ; - Left-Offset
+              cp    e              ; < 3rd argument ?
+              ld    b,a            ; result string length = difference
+              ret   c              ; yes, total rest string = result string
+              ld    b,e            ; no, 3rd argument = result string length
+              ret                  ; continue at LEFT$
+
+; VAL function - convert string into number
+FNVAL:
+              call  0x2A07         ; string length argument = 0 ?
+              jp    z,0x27F8       ; yes, 0 as integer in X, finished
+              ld    e,a            ; string length in E
+              inc   hl             ; string pointer + 1
+              ld    a,(hl)         ; string address in HL
+              inc   hl
+              ld    h,(hl)
+              ld    l,a
+              push  hl             ; string address on the stack
+              add   hl,de          ; + string length
+              ld    b,(hl)         ; save 1st character of next string
+              ld    (hl),d         ; replace with 00 (end of line)
+              ex    (sp),hl        ; string address of next string on stack, load current string add
+              push  bc             ; save 1st character of next string
+              ld    a,(hl)         ; load 1st character of string
+              call  STR_TO_DOUBLE  ; convert string to number (in X)
+              pop   bc             ; load 1st character of next string
+              pop   hl             ; load string address of next string
+              ld    (hl),b         ; put 1st character into next string back.
+              ret   
+
+; Subroutine for LEFT$, RIGHT$ and MID$
+L_R_M_SUB:
+              ex    de,hl          ; entry LEFT$ and RIGHT$, program pointer in HL
+              rst   8              ; check if closed with ')'
+              add   hl,hl
+              pop   bc             ; entry MID$, load return address
+              pop   de             ; load 2nd argument in E
+              push  bc             ; return address back on stack
+              ld    b,e            ; 2nd argument in B
+              ret   
+
+; Function token on the left side of an assignment
+              cp    0x7A           ; MID$ - Token
+              jp    nz,SYNTAX_ERR_HANDLER ; no, SYNTAX ERROR
+              jp    0x79D9         ; yes, to RAM expansion output
+
+; INP function
+; Read data from input port
+FNINP:
+              call  0x2B1F         ; Integer value of argument in A
+              ld    (0x7894),a     ; in INP and OUT subprograms as PORT#
+              call  0x7893         ; Call RAM subprogram
+              jp    0x27F8         ; Content of A as result in FAC X
+
+; OUT statement
+; Output data to output port
+CMDOUT:
+              call  0x2B0E         ; Analyze both arguments and Port number in RAM subprogram
+              jp    0x7896         ; Call RAM subprogram
+
+; Evaluate expression and convert result to integer
+              rst   0x10           ; Address next character
+              call  0x2337         ; Evaluate expression
+              push  hl             ; Program pointer on stack
+              call  FRCINT         ; Convert result to integer
+              ex    de,hl          ; Result in DE
+              pop   hl             ; Load program pointer
+              ld    a,d            ; Set flags
+              or    a
+              ret                  ; done
+
+; Analyze 2 arguments for OUT
+              call  GETBYT         ; Accept port number (in A)
+              ld    (0x7894),a     ; in INP and OUT subprograms
+              ld    (0x7897),a
+              rst   8              ; followed by a comma?
+              DEFB  0x2C
+              jr    GETBYT         ; Analyze value (<256) and into A
+
+; Evaluate expression, convert result to integer (<256)
+              rst   0x10           ; Address next character
+; GETBYT: (defined in symbols.sym)
+              call  0x2337         ; Evaluate expression
+              call  0x2B05         ; Convert result to integer (DE)
+              jp    nz,0x1E4A      ; > 256 = FUNCTION CODE error
+              dec   hl             ; Program pointer - 1
+              rst   0x10           ; Address next character
+              ld    a,e            ; Result in A
+              ret                  ; done
+
+; LLIST statement
+; List program on printer
+CMDLLIST:
+              ld    a,0x01         ; Output flag to printer
+              ld    (0x789C),a
+
+; LIST statement              
+; List program on screen
+CMDLIST:
+              pop   bc             ; Return address from stack
+              call  LIST_ARGS      ; Analyze both arguments
+              push  bc             ; 1. line address on stack
+@L1:
+              call  LIST_PAUSE_CHECK ; Interrupt/abort list?
+              ld    (0x78A2),hl    ; Set direct mode (line number = FFFF)
+              pop   hl             ; 1. line address in HL
+              pop   de             ; 2. line number in DE
+              ld    c,(hl)         ; Load line pointer
+              inc   hl
+              ld    b,(hl)
+              inc   hl
+              ld    a,b            ; Line address at line number
+              or    c              ; End of program? (pointer = 0000)
+              jp    z,MAIN_LOOP    ; Yes, back to main loop
+              call  HOOK_READ_INPUT_LIST ; RAM expansion output
+              call  ISCNTC         ; Examine key press
+              push  bc             ; Address of next line on stack
+              ld    c,(hl)         ; Load line number
+              inc   hl
+              ld    b,(hl)
+              inc   hl
+              push  bc             ; Program pointer on line text
+              ex    (sp),hl        ; Line number on stack
+              ex    de,hl          ; End line number in HL, line number in DE
+              rst   0x18           ; Line number > end line number?
+              pop   bc             ; Program pointer in BC
+              jp    c,MAIN_LOOP_ENTRY ; Yes, done
+              ex    (sp),hl        ; Load address of next line
+              push  hl             ; End line number on stack
+              push  bc             ; Program pointer on the stack
+              ex    de,hl          ; Line number in HL
+              ld    (0x78EC),hl    ; Store as '.' line number
+              call  LINPRT         ; Output line number
+              ld    a,0x20         ; Space after the line number
+              pop   hl             ; Load program pointer
+              call  CHAR_OUTPUT_DISPATCH ; Output space
+              call  DETOKEN        ; Generate readable text from intermediate code
+              ld    hl,(IO_BUF_PTR) ; Address I/O buffer
+              call  OUTSTR_00      ; Output text of the line
+              call  PRINT_CR       ; Output carriage return
+              jr    @L1            ; Next line
+
+; Output text string (terminated with 00)
+OUTSTR_00:
+              ld    a,(hl)         ; Load character
+              or    a              ; = End of text?
+              ret   z              ; Yes, finished!
+              call  CHAR_OUTPUT_DISPATCH ; Output character
+              inc   hl             ; Text address + 1
+              jr    OUTSTR_00      ; Next character
+
+; Generate readable text from intermediate code
+; Transferred from the program line into the I/O buffer.
+DETOKEN:
+              push  hl             ; Program pointer on the stack
+              ld    hl,(IO_BUF_PTR) ; Load buffer pointer into BC
+              ld    b,h
+              ld    c,l
+              pop   hl             ; Load program pointer
+              ld    d,0xFF         ; Max. characters = 255
+              jr    @L1
+              inc   bc             ; Buffer pointer + 1
+              dec   d              ; Character counter - 1
+              ret   z              ; Buffer full? Yes-finished
+@L1:
+              ld    a,(hl)         ; Load character from program
+              or    a              ; End of line?
+              inc   hl             ; Program pointer + 1
+              ld    (bc),a         ; Transfer character into buffer
+              ret   z              ; End of line, finished!
+              jp    LIST_STRING_OUT ; Continue at 2E9DH (Rucksack)
+              cp    0xFB           ; Token ' (REM)?
+              jr    nz,@L2         ; No!
+              dec   bc             ; Delete 'REM' from buffer
+              dec   bc
+              dec   bc
+              dec   bc
+              inc   d              ; Character counter + 4
+              inc   d
+              inc   d
+              inc   d
+@L2:
+              cp    0x95           ; Token 'ELSE'?
+              call  z,0x0B24       ; Yes, remove ':' before it
+              sub   0x7F           ; Token - 7F = index of keyword
+              push  hl             ; Program pointer on the stack
+              ld    e,a            ; Keyword number in E
+              ld    hl,KWD_80_END  ; Address keyword table
+@L3:
+              ld    a,(hl)         ; Load character from table
+              or    a              ; Start of a new keyword?
+              inc   hl             ; Table address + 1
+              jp    p,0x2BAC       ; No, search further
+              dec   e              ; Yes, sought keyword?
+              jr    nz,@L3         ; No, search next keyword
+              and   0x7F           ; Clear bit 7 of 1st character
+              ld    (bc),a         ; Transfer character into buffer
+              inc   bc             ; Buffer pointer + 1
+              dec   d              ; Buffer full, finished
+              jp    z,0x28D8       ; transfer character to buffer
+              ld    a,(hl)         ; Next keyword character
+              inc   hl             ; Table address + 1
+              or    a              ; New keyword?
+              jp    p,0x2BB7       ; No, transfer
+              pop   hl             ; Load program pointer again
+              jr    @L1            ; Next program character
+
+; DELETE command
+; Delete program lines
+CMDDELETE:
+              call  LIST_ARGS      ; Analyze both arguments
+              pop   de             ; 2. line number in DE
+              push  bc             ; 1. line address on stack
+              push  bc             ; (2 times)
+              call  FNDLIN         ; Determine 2. line address
+              jr    nc,@L1         ; Not found, FUNCTION CODE error
+              ld    d,h            ; 2. line address in DE
+              ld    e,l
+              ex    (sp),hl        ; 1. line address on stack
+              push  hl             ; 1. line address on stack
+              rst   0x18           ; 1. line address <= 2. line address
+@L1:
+              jp    nc,0x1E4A      ; No, FUNCTION CODE error
+              ld    hl,MSG_READY_TEXT ; Address text 'READY'
+              call  OUTSTR         ; And output
+              pop   bc             ; Load 1. line address
+              ld    hl,0x1AE8      ; Load return address
+              ex    (sp),hl        ; Swap with 2. line address
+; DELLIN: (defined in symbols.sym)
+              ex    de,hl          ; 2. line address in DE
+              ld    hl,(0x78F9)    ; Program text end in HL
+@L2:
+              ld    a,(de)         ; Load characters from the back of the program area
+              ld    (bc),a         ; And transfer forward
+              inc   bc
+              inc   de
+              rst   0x18           ; End of program reached?
+              jr    nz,@L2         ; No, next character
+              ld    h,b
+              ld    l,c            ; Last target address = new program end
+              ld    (0x78F9),hl    ; Save
+              ret   
+
+; SOUND command
+CMD_SOUND:
+              call  GETBYT         ; Analyze 1st parameter (Note)
+              cp    0x20           ; Note > 31?
+              jp    nc,0x1E4A      ; yes, FUNCTION-CODE Error
+              ld    (SOUND_NOTE_VALUE),a ; Save note value
+              rst   8              ; Followed by a comma?
+              DEFB  0x2C
+              call  GETBYT         ; Analyze 2nd parameter (Length)
+              or    a              ; Tone length = 0?
+              jp    z,0x1E4A       ; yes, FUNCTION CODE - Error
+              cp    0x0A           ; Tone length > 9?
+              jp    nc,0x1E4A      ; yes, FUNCTION CODE - Error
+              di                   ; Disable interrupts
+              push  hl             ; Push program pointer on stack
+              dec   a              ; Tone length - 1
+              push  af             ; on stack
+              ld    a,(SOUND_NOTE_VALUE) ; Load note value
+              or    a              ; = 0?
+              jr    z,SOUND_PAUSE  ; yes, pause
+              dec   a              ; Note value - 1
+              sla   a              ; * 2
+              ld    c,a            ; in BC = offset for frequency table
+              xor   a
+              ld    b,a
+              pop   af             ; Load tone length
+              ld    hl,SOUND_FREQ_TABLE ; Address frequency table
+              add   hl,bc          ; + offset for note
+              ld    e,(hl)         ; Load frequency value from table
+              inc   hl
+              ld    d,(hl)
+              push  de             ; Frequency value on stack
+              ld    hl,SOUND_TIME_VALUES ; Address table of base time values
+              srl   c              ; Frequency offset / 2
+              add   hl,bc          ; + table start address
+              ld    e,(hl)         ; = base time value for 1/8 note (in E)
+              ld    d,0x00
+              ld    hl,SOUND_DURATION_MULT ; Address table of multipliers for tone length
+              ld    c,a            ; Tone length - 1 in BC (= table offset)
+              add   hl,bc          ; + table start address
+              ld    b,(hl)         ; Load multiplier from table
+              push  de             ; Multiply base time value by B+1
+              pop   hl             ; Result in HL
+@L1:
+              add   hl,de
+              djnz  @L1
+              push  hl             ; Transfer tone duration to BC
+              pop   bc             ; as cycle counter
+              pop   hl             ; Load frequency value
+@L2:
+              call  CHECK_BREAK_STOP ; BREAK key pressed?
+              ld    a,(OUT_LATCH)  ; Load output latch byte
+              ld    d,a            ; in D
+              call  SOUND_PULSE    ; Output tone
+              dec   bc             ; Cycle counter - 1
+              ld    a,c            ; = 0?
+              or    b
+              jr    nz,@L2         ; no, hold tone
+              pop   hl             ; Load program pointer
+              ei                   ; Enable interrupts
+              ld    a,(hl)         ; Load character
+              inc   hl             ; Program pointer + 1
+              cp    0x3B           ; Followed by ';'?
+              jp    z,CMD_SOUND    ; yes, play next note
+              dec   hl             ; Program pointer - 1
+              ret                  ; done
+SOUND_PAUSE:
+              pop   af             ; Load tone length - 1
+              ld    c,a            ; in BC
+              xor   a
+              ld    b,a
+              ld    hl,SOUND_DURATION_MULT ; Address table of multipliers
+              add   hl,bc          ; + tone length - 1
+              ld    b,(hl)         ; Load multiplier from table
+              ld    hl,STACK_RECOVERY ; Load base value for 93.75 ms
+              push  hl
+              pop   de             ; Multiply base value by B+1
+@L1:
+              add   hl,de          ; = pause counter
+              djnz  @L1
+@L2:
+              call  CHECK_BREAK_STOP ; BREAK key pressed?
+              dec   hl             ; Counter - 1
+              ld    a,l            ; = 0?
+              or    h
+              jr    nz,@L2         ; no!
+              jr    $-36           ; yes, pause ended!
+
+; Output graphic characters to a printer
+PRN_GFX_CHAR:
+              push  bc             ; Save BC on stack
+              ld    b,a            ; Character in B
+              ld    a,0x08         ; Switch printer to graphics mode
+              call  PRN_CHAR_OUT   ; by outputting X'08'
+              ld    a,b            ; Character back in A
+              and   0x0F           ; Clear high nibble
+              push  hl             ; Save HL on stack
+              sla   a              ; Character * 2
+              ld    c,a            ; as table offset in BC
+              xor   a
+              ld    b,a
+              ld    hl,PRINTER_GRAPHICS_TABLE ; Address start of graphics table
+              add   hl,bc          ; + character offset
+              ld    a,(hl)         ; Load 1st table value in B
+              ld    b,a
+              inc   hl
+              ld    a,(hl)
+              ld    c,a            ; Load 2nd table value in C
+              ld    a,b
+              call  PRN_CHAR_OUT   ; Output value three times to printer
+              call  PRN_CHAR_OUT
+              call  PRN_CHAR_OUT
+              ld    a,c            ; 2nd table value in A
+              call  PRN_CHAR_OUT   ; Output value three times to printer
+              call  PRN_CHAR_OUT
+              call  PRN_CHAR_OUT
+              pop   hl             ; Restore HL and BC
+              pop   bc
+              ld    a,0x0F         ; Switch printer back to text mode
+              call  PRN_CHAR_OUT   ; by outputting X'0F'
+              ret                  ; done
+              jr    nc,$-97
+
+; PEEK function
+; Load content of a memory location
+PEEK:
+              call  FRCINT         ; Convert argument to integer (HL)
+              ld    a,(hl)         ; Load content of memory location
+              jp    0x27F8         ; as result in X
+
+; POKE command
+; Write value to memory location
+POKE:
+              call  0x2B02         ; Evaluate address and in DE
+              push  de             ; on stack
+              rst   8              ; Followed by a comma?
+              DEFB  0x2C
+              call  GETBYT         ; Evaluate value (<256) and in A
+              pop   de             ; Load address
+              ld    (de),a         ; Save value at this address
+              ret                  ; done
+
+; USING command
+; Formatted output
+PRINUS:
+              call  0x2338         ; Evaluate format string
+              call  CHKSTR         ; Not a string? TYPE MISMATCH - Error
+              rst   8              ; Followed by a semicolon?
+              DEFB  0x3B
+              ex    de,hl          ; Program pointer in DE
+              ld    hl,(FACLO)     ; Load pointer to format string
+              jr    @L1
+              ld    a,(USING_BUF)  ; Load next character
+              or    a              ; = end of command?
+              jr    z,@L2          ; yes, FUNCTION CODE - Error
+              pop   de             ; Load format string pointer
+              ex    de,hl          ; in HL
+@L1:
+              push  hl             ; Format string pointer on stack
+              xor   a              ; Clear last character
+              ld    (USING_BUF),a
+              cp    d
+              push  af             ; Clear Z flag and set Carry flag.
+              push  de             ; Result flags on stack
+              ld    b,(hl)         ; Program pointer on stack
+              or    b              ; Load string length
+@L2:
+              jp    z,0x1E4A       ; if length=0, FUNCTION CODE - Error
+              inc   hl             ; Format string pointer + 1
+              ld    c,(hl)         ; String address in HL
+              inc   hl
+              ld    h,(hl)
+              ld    l,c
+              jr    $+30
+
+; % - Determine field length
+USING_FIELD_LEN:
+              ld    e,b            ; String length in E
+              push  hl             ; String pointer on stack
+              ld    c,0x02         ; Number of characters = 2 (for boundary)
+@L2:
+              ld    a,(hl)         ; Load character
+              inc   hl             ; String pointer + 1
+              cp    0x25           ; = %?
+              jp    z,USING_STRING_PCT ; yes, output formatted string
+              cp    0x20           ; Space?
+              jr    nz,@L1         ; no, error!
+              inc   c              ; Number of characters + 1
+              djnz  @L2            ; String length - 1 > 0? yes, back
+@L1:
+              pop   hl             ; Reload string pointer
+              ld    b,e            ; String length back in B
+              ld    a,0x25         ; Output '%'
+
+; Search for start of a string or numeric field
+@L4:
+              call  USING_PLUS_CHECK ; '+' outside numeric field output.
+              call  CHAR_OUTPUT_DISPATCH ; Output characters
+              xor   a              ; A = 0
+              ld    e,a            ; Field length = 0
+              ld    d,a            ; Format-Flag = 0
+@L3:
+              call  USING_PLUS_CHECK ; '+' outside numeric field output.
+              ld    d,a            ; Format-Flag in D
+              ld    a,(hl)         ; Load character from string
+              inc   hl             ; String pointer + 1
+              cp    0x21           ; Numeric character?
+              jp    z,USING_STRING ; yes, print 1st character of strings
+              cp    0x23           ; Numeric character?
+              jr    z,USING_NUM_FIELD ; yes, analyze numeric field
+              dec   b              ; String length - 1
+              jp    z,USING_FORMAT_END ; = 0? Yes, end of string!
+              cp    0x2B           ; = '+' ?
+              ld    a,0x08         ; Format-Flag = 8
+              jr    z,@L3          ; yes, jump
+              dec   hl             ; load character again
+              ld    a,(hl)         ; Load character
+              inc   hl             ; String pointer + 1
+              cp    0x2E           ; Point?
+              jr    z,USING_DEC_PLACES ; yes, determine decimal places
+              cp    0x25           ; = '%' ?
+              jr    z,USING_FIELD_LEN ; yes, string formatting
+              cp    (hl)           ; = next character?
+              jr    nz,@L4         ; no, continue
+              cp    0x24           ; 2 Dollar signs?
+              jr    z,@L5          ; yes, set format flag
+              cp    0x2A           ; 2 Stars?
+              jr    nz,@L4         ; no, continue
+              ld    a,b            ; last character in format str.
+              cp    0x02           ; String length < 2?
+              inc   hl             ; string pointer to next character
+              jr    c,@L6          ; no!
+              ld    a,(hl)         ; load character
+              cp    0x24           ; Dollar signs?
+@L6:
+              ld    a,0x20         ; Bit 5 of format flag for '*' = 1
+              jr    nz,@L7         ; no!
+              dec   b              ; String length - 1
+              inc   e              ; numeric field length + 1
+              DEFB  0xFE           ; CP 0xAF Dummy-Instruction
+@L5:
+              xor   a              ; Clear Format-Flag
+              add   a,0x10         ; Bit 4 of Format-Flags for '$' = 1
+              inc   hl             ; string pointer + 1
+@L7:
+              inc   e              ; numeric field length + 1
+              add   a,d            ; combine Format-Flag with last one
+              ld    d,a            ; and in D
+; USING_NUM_FIELD: (defined in symbols.sym)
+              inc   e              ; numeric field length + 1
+              ld    c,0x00         ; Number of decimal places = 0
+              dec   b              ; String length - 1
+              jr    z,USING_NUM_FORMAT ; = 0? Yes, format string evaluated
+              ld    a,(hl)         ; Load character
+              inc   hl             ; String pointer + 1
+              cp    0x2E           ; Point?
+              jr    z,USING_DEC_LOOP ; yes, determine number of decimal places
+              cp    0x23           ; Numeric character?
+              jr    z,USING_NUM_FIELD ; yes, continue evaluating numeric field
+              cp    0x2C           ; Comma?
+              jr    nz,USING_NUM_PARAMS ; no, evaluate numeric field parameter
+              ld    a,d            ; Bit 6 of Format-Flags for ',' = 1
+              or    0x40
+              ld    d,a
+              jr    USING_NUM_FIELD ; continue at 2D4CH
+
+; Determine number of decimal places
+; USING_DEC_PLACES: (defined in symbols.sym)
+              ld    a,(hl)         ; Load character
+              cp    0x23           ; Numeric character?
+              ld    a,0x2E         ; output '.'
+              jr    nz,@L4         ; no, output '.'
+              ld    c,0x01         ; Counter for decimal places = 1
+              inc   hl             ; String pointer + 1
+; USING_DEC_LOOP: (defined in symbols.sym)
+              inc   c              ; Counter for decimal places + 1
+              dec   b              ; String length - 1
+              jr    z,USING_NUM_FORMAT ; = 0? Yes, end of string!
+              ld    a,(hl)         ; Load character
+              inc   hl             ; String pointer + 1
+              cp    0x23           ; Numeric character?
+              jr    z,USING_DEC_LOOP ; yes!
+
+; Evaluate numeric field end parameter
+; USING_NUM_PARAMS: (defined in symbols.sym)
+              push  de             ; Format-Flag on stack
+              ld    de,USING_NUM_EXIT ; set return address
+              push  de
+              ld    d,h            ; String pointer in DE
+              ld    e,l
+              cp    0x5B           ; Last character = '^' (up arrow)?
+              ret   nz             ; no, continue at 2D97H
+              cp    (hl)           ; also next 3 characters?
+              ret   nz             ; no!
+              inc   hl             ; String pointer + 1
+              cp    (hl)           ; next character?
+              ret   nz             ; no!
+              inc   hl             ; String pointer + 1
+              cp    (hl)           ; next character?
+              ret   nz             ; no!
+              inc   hl             ; String pointer + 1
+              ld    a,b            ; String length < 4?
+              sub   0x04           ; ignore the 4 arrows
+              ret   c              ; yes, ignore the 4 arrows
+              pop   de             ; Remove return address from stack
+              pop   de             ; Reload Format-Flag
+              ld    b,a            ; String length - 4
+              inc   d              ; Bit 1 of Format-Flags for exponent output set
+              inc   hl             ; String pointer + 1
+              DEFB  0xCA           ; JP Z,0D1EB Dummy-Instruction
+; USING_NUM_EXIT: (defined in symbols.sym)
+              ex    de,hl          ; String pointer back in HL
+              pop   de             ; Reload Format-Flag
+; USING_NUM_FORMAT: (defined in symbols.sym)
+              ld    a,d            ; Format-Flag in A
+              dec   hl             ; String pointer - 1
+              inc   e              ; Numeric field length + 1
+              and   0x08           ; '+' bit set?
+              jr    nz,@L8         ; yes!
+              dec   e              ; Numeric field length - 1
+              ld    a,b            ; String length = 0?
+              or    a
+              jr    z,@L8          ; yes, format string evaluated
+              ld    a,(hl)         ; Load character
+              sub   0x2D           ; Minus sign?
+              jr    z,@L9          ; yes!
+              cp    0xFE           ; Plus sign?
+              jr    nz,@L8         ; no, output!
+              ld    a,0x08         ; Bit 3 of Format-Flags for '+' = 1
+@L9:
+              add   a,0x04         ; Bit 2 of Format-Flags for sign behind number = 1
+              add   a,d            ; Combine with total Format-Flag
+              ld    d,a            ; and in D
+              dec   b              ; String length - 1
+@L8:
+              pop   hl             ; Reload program pointer
+              pop   af             ; Reload Flags
+              jr    z,@L10         ; Application? yes, done!
+              push  bc             ; String length + decimal places on stack
+              push  de             ; Format-Flag + numeric field length on stack
+              call  0x2337         ; Evaluate expression (to formatted number)
+              pop   de             ; Reload Format-Flag + numeric field length
+              pop   bc             ; String length + decimal places loaded
+              push  bc             ; and back on stack
+              push  hl             ; Program pointer on stack
+              ld    b,e            ; Numeric field length in B
+              ld    a,b            ; + decimal places
+              add   a,c            ; Combine into A
+              cp    0x19           ; Total field length >= 25?
+              jp    nc,0x1E4A      ; yes, FUNCTION CODE - Error
+              ld    a,d            ; Format-Flag in A
+              or    0x80           ; Bit 7 set (Formatting!)
+              call  PUFOUT         ; Convert number to formatted string
+              call  OUTSTR         ; and output it
+              pop   hl             ; Reload program pointer
+              dec   hl             ; Program pointer - 1
+              rst   0x10           ; address next character
+              scf                  ; set Carry (for CR)
+              jr    z,@L11         ; Instruction end? yes, jump
+              ld    (USING_BUF),a  ; store character
+              cp    0x3B           ; Semicolon?
+              jr    z,@L12         ; yes!
+              cp    0x2C           ; Comma?
+              jp    nz,SYNTAX_ERR_HANDLER ; no, SYNTAX ERROR
+@L12:
+              rst   0x10           ; next character
+@L11:
+              pop   bc             ; load character counter
+              ex    de,hl          ; program pointer in DE
+              pop   hl             ; load string pointer
+              push  hl             ; and back on stack
+              push  af             ; Flags on stack
+              push  de             ; Program pointer on stack
+              ld    a,(hl)         ; original string length in A
+              sub   b              ; -String length = number of processed characters
+              inc   hl             ; string pointer + 1
+              ld    c,(hl)         ; string address in HL
+              inc   hl
+              ld    h,(hl)
+              ld    l,c
+              ld    d,0x00         ; number of processed characters
+              ld    e,a            ; in DE
+              add   hl,de          ; +String address = address of the rest of the string
+              ld    a,b            ; remaining string length > 0?
+              or    a
+              jp    nz,0x2D03      ; yes, continue
+              jr    @L13           ; continue at 2E04H
+
+; Format string end
+; USING_FORMAT_END: (defined in symbols.sym)
+              call  USING_PLUS_CHECK ; '+' outside numeric field output.
+              call  CHAR_OUTPUT_DISPATCH ; Output characters
+@L13:
+              pop   hl             ; reload program pointer
+              pop   af             ; reload Flags
+              jp    nz,0x2CCB      ; Load next number with same format?
+@L10:
+              call  c,PRINT_CR     ; Carry set? yes, output CR
+              ex    (sp),hl        ; program pointer on stack
+              call  0x29DD         ; Remove format string from string area
+              pop   hl             ; reload program pointer
+              jp    PRINT_FINAL    ; Output flag on screen, done!
+
+; String formatting
+; USING_STRING: (defined in symbols.sym)
+              ld    c,0x01         ; Entry point '!', number of characters = 1
+              DEFB  0x3E           ; LD A,F1 Dummy-Instruction
+; USING_STRING_PCT: (defined in symbols.sym)
+              pop   af             ; Entry point '%', stack correction
+              dec   b              ; string length - 1
+              call  USING_PLUS_CHECK ; '+' outside numeric field output.
+              pop   hl             ; reload program pointer
+              pop   af             ; reload flag laden
+              jr    z,@L10         ; Application? yes, done!
+              push  bc             ; String length on stack
+              call  0x2337         ; evaluate expression
+              call  CHKSTR         ; Result not string? TM-Error
+              pop   bc             ; string length laden
+              push  bc             ; and back on stack
+              push  hl             ; program pointer on stack
+              ld    hl,(FACLO)     ; string pointer of the string to be formatted
+              ld    b,c            ; number of characters as 2nd argument for LEFT$ in B
+              ld    c,0x00         ; Left-Offset = 0
+              push  bc             ; both parameters on stack
+              call  0x2A68         ; Format string. The 1st '!' or the first '%' split off
+              call  0x28AA         ; Output formatted string
+              ld    hl,(FACLO)     ; String pointer in HL
+              pop   af             ; number of characters in A
+              sub   (hl)           ; length of formatted string
+              ld    b,a            ; -string length = processed characters
+              ld    a,0x20         ; Space characters load
+              inc   b              ; difference = 0?
+@L14:
+              dec   b
+              jp    z,0x2DD3       ; yes, continue
+              call  CHAR_OUTPUT_DISPATCH ; output spaces
+              jr    @L14           ; continue at 2E40H
+
+; Subroutine for USING
+; USING_PLUS_CHECK: (defined in symbols.sym)
+              push  af             ; save AF
+              ld    a,d            ; is bit set in format flag?
+              or    a              ; (can only be '+' bit)
+              ld    a,0x2B         ; load '+'
+              call  nz,CHAR_OUTPUT_DISPATCH ; yes, output
+              pop   af             ; reload AF
+              ret                  ; done
+
+; Output an existing line during AUTO input
+; AUTO_LINE_OUT: (defined in symbols.sym)
+              ld    h,b            ; Line address in HL
+              ld    l,c
+              inc   hl             ; Line address after line number
+              inc   hl
+              inc   hl
+              inc   hl
+              call  DETOKEN        ; Prepare line and put in I/O buffer
+              ld    hl,(IO_BUF_PTR) ; Load buffer address
+              call  OUTSTR_00      ; Output line
+              ret   
+
+; Execute MODE statement
+; MODE_CMD: (defined in symbols.sym)
+              rst   8              ; followed by a '(' ?
+              DEFB  0x28
+              call  GETBYT         ; Evaluate operand in parentheses
+              or    a              ; MODE (0) ?
+              jr    z,MODE_0_SET   ; yes, jump
+              dec   a              ; - 1
+              jr    z,MODE_1_SET   ; = 0? yes, MODE (1)!
+              jp    0x1E4A         ; no, FUNCTION CODE - Error
+
+; Set MODE (1)
+; MODE_1_SET: (defined in symbols.sym)
+              ld    d,0x00         ; Clear character = X'00'
+              ld    a,(OUT_LATCH)  ; Load output latch byte
+              or    0x08           ; Set bit 3
+              ld    (OUT_LATCH),a  ; and save back
+              jr    MODE_SCREEN_CLEAR ; continue at 2E87H
+
+; Set MODE (0)
+; MODE_0_SET: (defined in symbols.sym)
+              ld    d,0x20         ; Clear character = blank
+              ld    a,(OUT_LATCH)  ; Load output latch byte
+              and   0xF7           ; Clear bit 3
+              ld    (OUT_LATCH),a  ; and save back
+; MODE_SCREEN_CLEAR: (defined in symbols.sym)
+              ld    (0x6800),a     ; Output latch byte
+              push  hl             ; Program pointer on stack
+              ld    hl,0x7000      ; Load screen start address
+              ld    bc,0x0800      ; Counter = 2K byte
+@L15:
+              ld    a,d            ; Fill screen memory with clear character
+              ld    (hl),a         ; fill
+              inc   hl             ; Screen address + 1
+              dec   bc             ; Counter - 1
+              ld    a,b            ; 0?
+              or    c
+              jr    nz,@L15        ; no, continue
+              pop   hl             ; Load program pointer
+              rst   8              ; Termination with ')' ?
+              DEFB  0x29
+              ret   
+
+; Additional routine for LIST
+; (Output of strings)
+; LIST_STRING_OUT: (defined in symbols.sym)
+              cp    0x22           ; String start?
+              jp    z,0x2EB3       ; yes, continue at 2EB3H
+              or    a              ; is it a token?
+              jp    p,0x2B89       ; no, next character
+              jp    0x2B94         ; yes, continue at 2B94H
+@L16:
+              ld    a,(hl)         ; Load character
+              or    a              ; Test for end of line
+              inc   hl             ; Program pointer + 1
+              ld    (bc),a         ; Transfer character to buffer
+              ret   z              ; End of line, done
+              cp    0x22           ; String end?
+              jp    z,0x2B89       ; yes, continue at 2B89H
+              inc   bc             ; Buffer pointer + 1
+              dec   d              ; Buffer full?
+              ret   z              ; yes, stop
+              jr    @L16           ; next character in string
+
+; Interrupt Service Routine
+; (triggered every 20 ms by the video controller)
+; ISR_TIMER: (defined in symbols.sym)
+              push  af             ; Save register contents
+              push  bc
+              push  de
+              push  hl
+              call  0x787D         ; RAM expansion output
+              call  BG_COLOR_CHANGE_CONVERT ; Invert screen if necessary
+              call  CURSOR_BLINK   ; Output/blink cursor
+              call  KBD_SCAN_ONCE  ; Query keyboard
+              push  af             ; Save read character
+              ld    hl,FLAG2       ; Address flag 2
+              bit   0,(hl)         ; Carriage return flag set?
+              call  z,ECHO_CHAR    ; no, output character (echo)
+              pop   af             ; Reload character
+              call  KEY_BEEP       ; Sound buzzer
+              pop   hl             ; Restore register contents
+              pop   de
+              pop   bc
+              pop   af
+              ei                   ; Re-enable interrupts
+              reti                 ; RETURN from interrupt
+
+; Output / blink cursor
+; CURSOR_BLINK: (defined in symbols.sym)
+              ld    a,(FLAG2)      ; Load flag 2
+              bit   0,a            ; Carriage return flag set?
+              ret   nz             ; yes, done
+              ld    hl,0x7841      ; Address blink counter
+              dec   (hl)           ; - 1
+              ret   nz             ; not zero, done!
+              ld    a,0x10         ; Reset blink counter
+              ld    (0x7841),a     ; save back
+              ld    hl,(CURS_ADDR) ; Load cursor address
+              ld    a,0x40         ; Set inverse bit in A
+              xor   (hl)           ; Invert character at cursor position
+              ld    (hl),a
+              ret   
+
+; Read a character from the keyboard
+; (Called via keyboard DCB)
+; KBD_READ_CHAR: (defined in symbols.sym)
+              call  KBD_SCAN_ONCE  ; Evaluate keyboard
+              push  af             ; Save character
+              call  KBD_FLAGS_RESET ; Reset flags
+              pop   af             ; Reload character
+              ret   
+
+; Evaluate keyboard once
+; KBD_SCAN_ONCE: (defined in symbols.sym)
+              ld    a,(0x6800)     ; read all rows of the keyboard matrix
+              or    0xC0           ; mask out columns 6 and 7
+              cpl                  ; invert A register
+              cp    0x00           ; if = 0, no key pressed
+              jr    z,KBD_FLAGS_RESET ; yes! then clear all flags
+              call  KBD_SCAN_ROWS  ; evaluate matrix rows individually
+              or    a              ; no ASCII character?
+              jp    nz,KBD_ROLLOVER ; yes, check for multiple presses
+
+; Reset flag bits
+; KBD_FLAGS_RESET: (defined in symbols.sym)
+              ld    hl,0x7838      ; Address flag 1
+              bit   2,(hl)         ; Function flag set?
+              jr    z,@L17         ; no!
+              ld    a,(0x783A)     ; Load time counter
+              or    a              ; 0?
+              jr    z,@L17         ; yes, do not clear function flag
+              res   2,(hl)         ; Clear function flag
+@L17:
+              ld    a,(hl)         ; Load flag 1
+              and   0x06           ; clear all except function + inverse flag
+              ld    (0x7838),a     ; and save back
+              xor   a              ; Clear character buffer B1
+              ld    (0x7836),a
+              ret   
+
+; Evaluate keyboard row by row
+; KBD_SCAN_ROWS: (defined in symbols.sym)
+              ld    hl,0x68FE      ; Address keyboard row 1
+              ld    c,0x08         ; Row counter = 8
+@L20:
+              ld    b,0x06         ; Column counter = 6
+              ld    a,(hl)         ; Load row content
+              or    0x04           ; mask out column 2 (special function)
+@L19:
+              rra                  ; least significant bit into carry
+              jr    nc,@L18        ; key found
+              djnz  @L19           ; next bit (8x)
+              rlc   l              ; address next row
+              dec   c              ; row counter - 1
+              jr    nz,@L20        ; > 0 ? yes, next row
+              ld    b,0x04         ; column counter = 4 (column 2)
+              ld    hl,0x68DF      ; Address keyboard row 6
+              ld    a,(hl)         ; Load row content
+              bit   2,a            ; '-' key pressed?
+              jr    z,KBD_SCAN_BIT_LOOP ; yes!
+              rlc   l              ; Address keyboard row 7
+              ld    a,(hl)         ; Load row content
+              bit   2,a            ; RETURN key?
+              jr    z,@L21         ; yes!
+              rlc   l              ; Address keyboard row 8
+              ld    a,(hl)         ; Load row content
+              bit   2,a            ; ':' key pressed?
+              jr    z,@L22         ; yes!
+              xor   a              ; return with A = 0
+              ret   
+
+; Keyboard query bit by bit
+; KBD_SCAN_BIT_LOOP: (defined in symbols.sym)
+              ld    c,0x03         ; Row counter = 3 (for '-')
+              jr    @L23           ; continue at 2F60H
+@L21:
+              ld    c,0x02         ; Row counter = 2 (for RETURN)
+              jr    @L23           ; continue at 2F60H
+@L22:
+              ld    c,0x01         ; Row counter = 1 (for ':')
+@L23:
+              or    0x04           ; hide column 2 again
+@L18:
+              ld    e,a            ; remember row content in E !!!
+; KBD_CALC_OFFSET: (defined in symbols.sym)
+              ld    a,0x06         ; Calculate offset for the keyboard tables
+              sub   b
+              sla   a              ; A = 8 * ( 6 - B ) + 8 - C
+              sla   a
+              sla   a
+              add   a,0x08
+              sub   c
+              ld    (0x7842),bc    ; remember row and column counters
+              ld    (0x7844),hl    ; remember row address
+; KBD_LOAD_TABLE: (defined in symbols.sym)
+              ld    hl,KEYBOARD_CODES_NORMAL ; keyboard table 1 (without SHIFT) addr.
+              ld    c,a            ; table offset in BC
+              ld    b,0x00
+              ld    a,(0x68FB)     ; load keyboard row 3
+              bit   2,a            ; SHIFT key pressed?
+              jr    nz,@L24        ; no!
+              ld    hl,0x7838      ; address Flag 1
+              set   0,(hl)         ; set SHIFT-Flag
+              ld    hl,KEYBOARD_CODES_SHIFT ; keyboard table 2 (with SHIFT) addr.
+              jr    @L25           ; read code from table
+@L24:
+              ld    a,(0x68FD)     ; load keyboard row 2
+              bit   2,a            ; CTRL key pressed?
+              jr    nz,@L26        ; no!
+              ld    a,(0x687F)     ; load keyboard row 8
+              bit   2,a            ; ';' - Key pressed? (INVERSE)
+              jr    nz,@L27        ; no!
+              ld    hl,0x7838      ; address Flag 1
+              bit   5,(hl)         ; WAIT flag set?
+              jr    nz,@L28        ; yes, ignore key press
+              ld    a,(hl)         ; load Flag 1
+              xor   0x22           ; invert INVERSE flag, set WAIT flag
+              ld    (hl),a         ; save Flag 1
+@L28:
+              xor   a              ; A = 0
+              pop   bc             ; remove return address
+              ret                  ; two levels back
+@L27:
+              ld    hl,0x7838      ; address Flag 1
+              set   7,(hl)         ; set CONTROL flag
+              bit   2,(hl)         ; FUNCTION flag set?
+              jr    z,@L29         ; no!
+              ld    hl,KEYBOARD_CODES_FUNCTION ; keyboard table 4 (Functions) addr.
+              jr    @L25           ; read code from table
+@L29:
+              ld    a,(0x68BF)     ; load keyboard row 7
+              bit   2,a            ; RETURN pressed?
+              jr    nz,@L30        ; no!
+              set   2,(hl)         ; set FUNCTION flag
+              xor   a              ; reset timer
+              ld    (0x783A),a
+              ret   
+@L30:
+              res   2,(hl)         ; clear FUNCTION flag
+              ld    hl,KEYBOARD_CODES_CTRL ; keyboard table 3 (Keywords) addr.
+@L25:
+              add   hl,bc          ; Table addr. + Offset
+              ld    a,(hl)         ; read code from table
+              ret                  ; back
+@L26:
+              ld    a,(0x7838)     ; load Flag 1
+              and   0x81           ; SHIFT or CTRL flag set?
+              jr    z,@L25         ; no, determine code
+              xor   a              ; ignore key
+              pop   hl             ; remove return address
+              ret                  ; two levels back
+
+; Key repeat
+; KBD_REPEAT: (defined in symbols.sym)
+              ld    hl,0x7838      ; address Flag 1
+              bit   5,(hl)         ; WAIT flag set?
+              jr    z,@L31         ; no!
+              ld    a,(0x783A)     ; timer + 1
+              inc   a
+              ld    (0x783A),a
+              cp    0x2A           ; 0.84 seconds?
+              jr    z,@L32         ; yes!
+              xor   a              ; back with A = 0
+              ret   
+@L32:
+              ld    a,(hl)         ; load Flag 1
+              and   0xDF           ; clear WAIT flag
+              or    0x40           ; set REPEAT flag
+              ld    (0x7838),a     ; save Flag 1
+@L35:
+              xor   a              ; reset timer
+              ld    (0x783A),a
+              bit   4,(hl)         ; 2 keys pressed?
+              jr    nz,@L33        ; yes!
+              ld    a,(0x7836)     ; load key code from character buffer
+              ret   
+@L33:
+              ld    a,(0x7837)     ; load code for 2nd key
+              ret   
+@L31:
+              bit   6,(hl)         ; REPEAT flag set?
+              jr    nz,@L34        ; yes!
+              set   5,(hl)         ; set WAIT flag
+              xor   a              ; reset timer
+              ld    (0x783A),a
+              ret                  ; back with A = 0
+@L34:
+              ld    a,(0x783A)     ; timer + 1
+              inc   a
+              ld    (0x783A),a
+              cp    0x06           ; 0.12 seconds?
+              jr    z,@L35         ; yes!
+              xor   a              ; back with A = 0
+              ret                  ; back
+
+; Display entered character on screen
+; (ECHO function)
+; ECHO_CHAR: (defined in symbols.sym)
+              or    a              ; A = 0? (no character)
+              ret   z              ; yes, finished
+              push  af             ; save character
+              call  DIRECT_OUT_CHAR_TOKEN ; output character
+              pop   af             ; reload character
+              cp    0x0D           ; was it a Carriage Return?
+              ret   z              ; yes, finished
+              cp    0x01           ; or BREAK?
+              ret   z              ; yes, also finished
+              ld    a,(FLAG2)      ; load Flag 2
+              bit   0,a            ; CR flag set?
+              ret   nz             ; yes, finished
+              ld    a,0x20         ; wait for double value (pause)
+              ld    (0x7841),a
+              ld    hl,(CURS_ADDR) ; load cursor address
+              jp    CHAR_INVERT    ; output character inverted
+
+; Direct output of a character or keyword
+; DIRECT_OUT_CHAR_TOKEN: (defined in symbols.sym)
+              ld    hl,0x7838      ; address Flag 1
+              bit   7,(hl)         ; CONTROL flag set?
+              jp    z,OUT_CHAR_RESTORE_2 ; no, output character
+              or    a              ; is it a token?
+              jp    p,OUT_CHAR_RESTORE_2 ; no, output character
+              push  af             ; save character
+              sub   0x80           ; clear bit 7
+              inc   a              ; + 1 as word counter
+              ld    b,a
+              ld    hl,0x164F      ; address of keyword table - 1
+@L36:
+              inc   hl             ; address pointer + 1
+              bit   7,(hl)         ; start of a new word?
+              jr    z,@L36         ; no, continue
+              djnz  @L36           ; word counter - 1 = 0?
+              ld    a,(hl)         ; yes, searched keyword
+@L37:
+              call  OUT_PREP_CHAR  ; output character from table
+              ld    a,(hl)         ; next character
+              bit   7,a            ; new keyword?
+              jr    z,@L37         ; no, output character
+              pop   af             ; reload character from stack
+
+; Check if the token should have a '(' appended.
+; CHECK_APPEND_PAREN: (defined in symbols.sym)
+              ld    b,0x16         ; Number of table elements
+              ld    hl,TOKEN_APPEND_PAREN ; Starting address of the table
+@L38:
+              cp    (hl)           ; Token = table entry?
+              jr    z,OUT_APPEND_PAREN ; yes, jump
+              inc   hl             ; address pointer + 1
+              djnz  @L38           ; next table entry
+
+; not in table, special handling 'DEF'
+; DEF_SPECIAL_PROC: (defined in symbols.sym)
+              cp    0xB0           ; DEF token?
+              ret   nz             ; no, done!
+              ld    a,0x20         ; yes, append ' '
+              call  OUT_PREP_CHAR
+              ld    a,0x46         ; output 'F'
+              call  OUT_PREP_CHAR  ; output character
+              ld    a,0x4E         ; output 'N'
+              call  OUT_PREP_CHAR  ; output character
+              ret                  ; done!
+; OUT_APPEND_PAREN: (defined in symbols.sym)
+              ld    a,0x28         ; yes, append '('
+              call  OUT_PREP_CHAR
+              ret   
+
+; prepare a character for output
+; OUT_PREP_CHAR: (defined in symbols.sym)
+              and   0x7F           ; clear bit 7
+              push  hl             ; string pointer on stack
+              call  OUT_CHAR_RESTORE_2 ; output character
+              pop   hl             ; load string pointer
+              inc   hl             ; string pointer + 1
+              ret   
+
+; Buffered output of characters
+; OUT_BUF_CHAR: (defined in symbols.sym)
+              push  af             ; save character
+              ld    a,(OUT_LATCH)  ; load I/O latch byte
+              bit   3,a            ; system in graphics mode?
+              jr    z,@L39         ; no!
+              and   0xF7           ; clear bit 3
+              ld    (OUT_LATCH),a  ; save I/O latch byte
+              ld    (0x6800),a     ; switch to text mode
+              ld    bc,0x0200      ; video memory for text mode
+              ld    hl,0x7000      ; clear (512 bytes)
+@L40:
+              call  CLEAR_CHAR_GET ; clear characters
+              inc   hl             ; next address
+              dec   bc             ; counter - 1
+              ld    a,c            ; = 0? (done)
+              or    b
+              jr    nz,@L40        ; no, next character
+@L39:
+              pop   af             ; load character to be output
+              ld    hl,FLAG2       ; address Flag 2
+              bit   5,(hl)         ; initialization flag set?
+              jp    z,OUT_CHAR_CONTROL ; no, direct output of character
+              cp    0x20           ; is it a control character?
+              jp    nc,0x30C0      ; no!
+
+; Wait until print buffer is completely output
+; OUT_WAIT_BUF: (defined in symbols.sym)
+              push  af             ; save character
+@L41:
+              ld    a,(0x7AAF)     ; load buffer counter
+              or    a              ; = 0?
+              jr    nz,@L41        ; no, wait!
+              pop   af             ; reload character
+              di                   ; disable interrupts
+              ld    hl,(0x7AB0)    ; load buffer pointer
+              ld    (hl),a         ; transfer character to buffer
+              inc   hl             ; buffer pointer + 1
+              ld    (0x7AB0),hl    ; and save back
+              ld    hl,0x7AAF      ; address buffer counter
+              inc   (hl)           ; + 1
+              push  af             ; save character
+              ld    a,(TTYPOS)     ; pointer to screen output column
+              add   a,(hl)         ; + number of characters in buffer
+              ld    (0x7AAE),a     ; position pointer in line
+              pop   af             ; reload character
+              ei                   ; enable interrupts again
+              cp    0x20           ; was it a control character?
+              jp    c,0x30E3       ; yes!
+              ld    a,0x14         ; maximum 20 characters in print buffer
+              cp    (hl)           ; limit exceeded
+              jp    c,0x30DE       ; yes, wait until buffer is emptier
+              ret   
+              xor   a              ; wait until buffer is empty
+@L42:
+              cp    (hl)
+              jr    nz,@L42
+              ret                  ; done
+
+; Output print buffer after an interrupt
+; OUT_BUF_FLUSH: (defined in symbols.sym)
+              ld    a,(0x7AAF)     ; load buffer counter
+              or    a              ; buffer empty?
+              ret   z              ; yes, done
+              ld    b,a            ; in B as loop counter
+              ld    hl,0x7AB2      ; load buffer start address
+              push  hl             ; and on the stack
+@L43:
+              ld    a,(hl)         ; load character from buffer
+              inc   hl             ; buffer address + 1
+              push  hl             ; buffer address on stack
+              push  bc             ; character counter on stack
+              call  OUT_CHAR_CONTROL ; output character
+              pop   bc             ; load character counter
+              pop   hl             ; load buffer address
+              djnz  @L43           ; buffer empty?
+              pop   hl             ; yes, load buffer start address
+              ld    (0x7AB0),hl    ; save as new buffer pointer
+              xor   a              ; buffer counter = 0
+              ld    (0x7AAF),a
+              ret   
+
+; Control of the output of a character
+; OUT_CHAR_CONTROL: (defined in symbols.sym)
+              call  CURSOR_CHAR_RESTORE ; restore character at cursor position
+              or    a              ; character to be output = 0?
+              jr    z,@L44         ; yes, CR from RDLINE!
+              cp    0x0D           ; is it a Carriage Return?
+              jr    nz,OUT_CHAR_BIT7_CHECK ; no, output character
+@L44:
+              push  af             ; save character
+              ld    hl,(CURS_ADDR) ; load cursor address
+              ld    a,(TTYPOS)     ; load column pointer
+              ld    c,a            ; transfer to BC
+              xor   a
+              ld    b,a
+              ld    (TTYPOS),a     ; column pointer to column 0
+              sbc   hl,bc          ; cursor address to start of line
+              ld    bc,RST20_VEC   ; + 1 line (32 characters)
+              add   hl,bc
+              ld    a,h            ; address outside of the screen?
+              cp    0x72
+              call  p,SCROLL_UP_ONE_LINE ; yes, scroll screen up 1 line
+              ld    (CURS_ADDR),hl ; save new cursor address
+              call  0x0053         ; save character from cursor position
+              pop   af             ; load character to be output
+              or    a              ; CR from RDLINE (03E3H)?
+              ret   z              ; yes, done
+              call  GET_LINE_STATUS ; determine status of the line
+              cp    0x80           ; single line?
+              ret   z              ; yes, done
+              cp    0x81           ; first of a double line?
+              jr    nz,@L45        ; no, continuation line
+              dec   a              ; both lines to single lines
+              ld    (hl),a         ; convert
+              inc   hl
+              ld    (hl),a
+              ret                  ; done
+@L45:
+              ld    a,0x80         ; continuation line in single line
+              ld    (hl),a         ; convert
+              ret                  ; done
+
+; Output character or execute control functions
+; Entry point is 3157 or 315A
+; OUT_CHAR_PROCESS: (defined in symbols.sym)
+              bit   6,a            ; inverted alphanumeric character?
+              jr    z,@L46         ; no, block graphics!
+              jp    CHAR_OUT_BG_ADJUST ; inverted representation depending
+              nop                  ; on background
+@L46:
+              and   0x8F           ; clear bits 4, 5, 6
+              ld    b,a            ; graphics character in B
+              ld    a,(0x7846)     ; load color code
+              or    b              ; combine with graphics character
+              ld    b,a            ; character in B
+              jr    OUT_SCREEN_RAW ; and output
+; OUT_CHAR_RESTORE_2: (defined in symbols.sym)
+              call  CURSOR_CHAR_RESTORE ; restore character at cursor position
+; OUT_CHAR_BIT7_CHECK: (defined in symbols.sym)
+              or    a              ; bit 7 of the character to be output = 1?
+              jp    m,OUT_CHAR_PROCESS ; yes, jump
+              cp    0x0D           ; Carriage Return?
+              ret   z              ; yes, done!
+              cp    0x08           ; BACKSPACE?
+              jp    z,OUT_CURSOR_DEC ; yes!
+              cp    0x1B           ; cursor up?
+              jp    z,OUT_CURSOR_UP ; yes!
+              cp    0x0A           ; cursor down?
+              jp    z,OUT_CURSOR_DOWN ; yes!
+              cp    0x08           ; cursor left?
+              jp    z,OUT_CURSOR_DEC ; yes!
+              cp    0x09           ; cursor right?
+              jp    z,0x31B8       ; yes!
+              cp    0x01           ; BREAK?
+              ret   z              ; yes, done!
+              cp    0x7F           ; RUBOUT?
+              jp    z,RUBOUT_CHAR  ; yes!
+              cp    0x15           ; INSERT?
+              jp    z,INSERT_CHAR  ; yes!
+              cp    0x18           ; arrow left?
+              jp    z,OUT_CURSOR_DEC ; yes!
+              cp    0x19           ; arrow right?
+              jp    z,0x31B8       ; yes!
+              cp    0x1B           ; arrow up?
+              jp    z,OUT_CURSOR_UP ; yes!
+              cp    0x1C           ; cursor to start of screen?
+              jp    z,OUT_CURSOR_HOME ; yes!
+              cp    0x1D           ; cursor to start of line?
+              jp    z,OUT_CURSOR_SOL ; yes!
+              cp    0x1F           ; clear screen?
+              jp    z,OUT_SCREEN_CLS ; yes!
+              cp    0x20           ; ignore remaining control characters
+              ret   m
+              jp    CHAR_OUT_INVERT_ADJUST ; continue at 3ECA (supplement)
+              ld    hl,0x7838      ; address Flag 1
+              bit   1,(hl)         ; INVERSE flag set?
+              pop   hl             ; clean up stack
+              jr    z,@L47         ; no!
+              or    0x40           ; yes, invert character
+@L47:
+              ld    b,a            ; character in B
+; OUT_SCREEN_RAW: (defined in symbols.sym)
+              ld    a,b            ; transfer character to A
+              ld    (hl),a         ; output on screen
+              call  OUT_CURSOR_ADVANCE ; advance cursor one position
+              call  GET_CURSOR_CHAR ; save character at cursor position
+              ret   
+
+; Advance cursor one character position
+; OUT_CURSOR_ADVANCE: (defined in symbols.sym)
+              ld    a,(TTYPOS)     ; load column pointer
+              inc   a              ; + 1
+              cp    0x20           ; at the beginning of the next line?
+              jr    nz,@L48        ; no!
+              call  GET_LINE_STATUS ; determine line status
+              cp    0x81           ; first of a double line?
+              jr    z,@L49         ; yes!
+              or    a              ; second of a double line?
+              jr    nz,@L50        ; no!
+              ld    b,a            ; status in B
+              ld    a,(FLAG2)      ; load Flag 2
+              bit   0,a            ; CR flag set?
+              ld    a,b            ; status back in A
+              ret   z              ; yes, maximum two lines!
+              xor   a              ; next line = continuation line
+              inc   hl
+              ld    (hl),a         ; (= 00)
+              inc   hl             ; HL to status of the next line
+              push  hl             ; and remember
+              ld    bc,(PRGEND)    ; is this the last line?
+              dec   bc             ; (this routine collides)
+              dec   bc             ; (with programs that do not)
+              or    a              ; (begin by default)
+              sbc   hl,bc
+              pop   hl
+              jr    nc,@L49        ; yes, last line
+              ld    a,(hl)         ; load status of the line
+              or    a              ; line status = 00?
+              jr    nz,@L49        ; if so, continuation line
+              ld    a,0x80         ; no!
+              ld    (hl),a         ; mark line as single line
+@L49:
+              xor   a
+@L48:
+              ld    (TTYPOS),a     ; column pointer = 0
+              ld    hl,(CURS_ADDR) ; load cursor address
+              ld    bc,0x0001      ; + 1
+              add   hl,bc
+              ld    a,h            ; outside of the screen?
+              cp    0x72
+              call  p,SCROLL_UP_ONE_LINE ; yes, scroll up one line
+              ld    (CURS_ADDR),hl ; save cursor address
+              ret                  ; done
+@L50:
+              push  af             ; remember status
+              ld    de,(CURS_ADDR) ; load cursor address
+              inc   de             ; + 1
+              ld    a,d            ; outside of the screen?
+              cp    0x72
+              jr    z,@L51         ; yes!
+              push  hl             ; status address on stack
+              ld    hl,FLAG2       ; address Flag 2
+              bit   0,(hl)         ; CR flag set?
+              jr    nz,@L52        ; yes!
+              bit   4,(hl)         ; INPUT flag set?
+              jr    nz,@L52        ; yes!
+              call  SCROLL_DOWN_FROM_CURSOR ; scroll back one line
+@L52:
+              pop   hl             ; load status address
+@L51:
+              pop   af             ; load line status
+              inc   a              ; set status = 81
+              ld    (hl),a         ; = double-line!
+              jp    0x31D9
+
+; Move cursor one character to the left
+; OUT_CURSOR_DEC: (defined in symbols.sym)
+              ld    a,(TTYPOS)     ; load column pointer
+              dec   a              ; - 1
+              jp    p,0x3235       ; still same line!
+              call  GET_LINE_STATUS ; determine line status
+              or    a              ; is this a continuation line?
+              ret   nz             ; no, cannot go further back
+              ld    a,0x1F         ; column pointer to last column
+              ld    (TTYPOS),a     ; and save
+              ld    bc,0x0001      ; cursor address - 1
+              ld    hl,(CURS_ADDR)
+              xor   a
+              sbc   hl,bc
+              ld    a,h            ; outside of the screen?
+              cp    0x70
+              jp    c,0x324E       ; yes!
+              ld    (CURS_ADDR),hl ; new cursor address back
+              call  0x0053         ; save character at cursor position
+              ret   
+              xor   a              ; column pointer = 0 (1st column)
+              ld    (TTYPOS),a
+              ret   
+
+; Move cursor one line up
+; OUT_CURSOR_UP: (defined in symbols.sym)
+              ld    hl,FLAG2       ; address Flag 2
+              bit   4,(hl)         ; INPUT flag set?
+              ret   nz             ; yes, illegal!
+              ld    bc,RST20_VEC   ; length of a line
+              ld    hl,(CURS_ADDR) ; load cursor address
+              xor   a              ; clear carry flag
+              sbc   hl,bc          ; cursor address - 1 line
+              ld    a,h            ; outside of the screen?
+              cp    0x70
+              ret   m              ; yes, does not work!
+              ld    (CURS_ADDR),hl ; save cursor address
+              call  0x0053         ; save character at cursor position
+              ret   
+
+; Move cursor one line down
+; OUT_CURSOR_DOWN: (defined in symbols.sym)
+              ld    hl,FLAG2       ; address Flag 2
+              bit   4,(hl)         ; INPUT flag set?
+              ret   nz             ; yes, not allowed!
+              ld    bc,RST20_VEC   ; load length of a line
+              ld    hl,(CURS_ADDR) ; load cursor address
+              add   hl,bc          ; + one line
+              ld    a,h            ; outside of the screen?
+              cp    0x72
+              call  p,SCROLL_UP_BY_STATUS ; yes, scroll up one line
+              ld    (CURS_ADDR),hl ; save cursor address
+              call  0x0053         ; save character at cursor position
+              ret   
+
+; Move cursor to start of screen
+; OUT_CURSOR_HOME: (defined in symbols.sym)
+              ld    hl,0x7000      ; load start of screen address
+              ld    (CURS_ADDR),hl ; in cursor address
+              xor   a              ; column pointer = 0
+              ld    (TTYPOS),a
+              ret   
+
+; Clear screen
+; OUT_SCREEN_CLS: (defined in symbols.sym)
+              ld    hl,0x7000      ; load start of screen address
+              ld    (CURS_ADDR),hl ; in cursor address
+              ld    bc,0x0200      ; length of text memory
+@L53:
+              call  CLEAR_CHAR_GET ; delete one character
+              inc   hl             ; screen address + 1
+              dec   bc             ; length - 1
+              ld    a,c            ; at end of screen?
+              or    b
+              jr    nz,@L53        ; no, next character
+              xor   a              ; column pointer = 0
+              ld    (TTYPOS),a
+              ld    b,0x10         ; counter = 16 (number of lines)
+              ld    a,0x80         ; load single-line status
+              ld    hl,LINE_STATUS ; address status byte of 1st line
+@L54:
+              ld    (hl),a         ; (HL),A = single-line
+              inc   hl             ; status byte of next line
+              djnz  @L54           ; all lines processed?
+              ret                  ; yes, done!
+
+; Move cursor to start of line
+; OUT_CURSOR_SOL: (defined in symbols.sym)
+              ld    hl,(CURS_ADDR) ; load cursor address
+              ld    a,(TTYPOS)     ; load column pointer
+              ld    c,a            ; transfer to BC
+              xor   a
+              ld    b,a
+              ld    (TTYPOS),a     ; column pointer = 0
+              sbc   hl,bc          ; cursor address - column pointer
+              ld    (CURS_ADDR),hl ; save new cursor address
+              ret                  ; test comment
+
+; INSERT CHARACTER FUNCTION                                      
+; INSERT_CHAR: (defined in symbols.sym)
+              call  GET_LINE_STATUS ; Determine status of current line
+              cp    0x81           ; Is it the first line of a double line?
+              jr    z,@L55         ; Yes!
+              ld    a,(TTYPOS)     ; Load column pointer
+              cp    0x1F           ; At the end of the line?
+              jr    z,@L56         ; Yes!
+              ld    c,a            ; Transfer column pointer to C
+              xor   a
+              ld    b,a            ; Clear B
+              ld    hl,(CURS_ADDR) ; Load cursor address
+              sbc   hl,bc          ; Cursor address - column pointer = start of line
+              ld    bc,0x001F      ; Width of line (32 bytes - 1)
+              add   hl,bc          ; Address of the last character of the line
+              call  CHAR_IS_BLANK_TEST ; Test last character of the line
+              jr    nz,@L56        ; If not space, no insert possible!
+              push  hl             ; Last character address
+              pop   de             ; in DE
+              dec   hl             ; HL = second to last character
+              ld    a,(TTYPOS)     ; Load column pointer
+              ld    c,a            ; Transfer to C
+              ld    a,0x1F         ; Line width - 1
+@L58:
+              sub   c              ; Calculate remaining characters: 31 - column
+              ld    c,a            ; Remaining characters to shift in BC
+              lddr                 ; Shift characters right by one position
+              call  INSERT_BLANK_CHAR ; Insert space at cursor position
+              ld    (0x783C),a     ; Save character at cursor position
+              ret                  ; Done
+@L56:
+              call  GET_LINE_STATUS ; Determine status of current line
+              or    a              ; Is it a follow-up line?
+              ret   z              ; Yes, done (no insert possible)
+@L55:
+              cp    0x80           ; Is it a single line?
+              jr    z,@L57         ; Yes!
+              ld    a,(TTYPOS)     ; Load column pointer
+              ld    c,a            ; Transfer to C
+              xor   a
+              ld    b,a            ; Clear B
+              ld    hl,(CURS_ADDR) ; Load cursor address
+              sbc   hl,bc          ; Cursor address - column pointer = start of line
+              ld    bc,0x003F      ; + 63
+              add   hl,bc          ; HL = end of double line
+              call  CHAR_IS_BLANK_TEST ; Is the last character empty (space)?
+              ret   nz             ; No, no insert possible!
+              push  hl             ; Last character address
+              pop   de             ; in DE
+              dec   hl             ; HL = end of double line - 1
+              ld    a,(TTYPOS)     ; Load column pointer
+              ld    c,a            ; Transfer to C
+              ld    a,0x3F         ; Double line width - 1
+              jr    @L58           ; Determine count and shift double line
+@L57:
+              push  hl             ; Status address on stack
+              call  SCROLL_DOWN_FROM_CURSOR ; Scroll screen down 1 line from cursor
+              pop   hl             ; Restore status address
+              ld    a,0x81         ; Set status of 1st line to 0x81 (double-line start)
+              ld    (hl),a         ; Write status of 1st line
+              inc   hl             ; Address next status byte
+              xor   a              ; Set status of new line to 0x00 (double-line follow-up)
+              ld    (hl),a         ; Write status of 2nd line
+              ret                  ; Done
+
+; SCROLL SCREEN DOWN ONE LINE FROM CURSOR POSITION               
+; SCROLL_DOWN_FROM_CURSOR: (defined in symbols.sym)
+              ld    hl,(CURS_ADDR) ; Load cursor address
+              ld    a,h
+              cp    0x71           ; Is it the last line (address >= 0x71E0)?
+              jr    nz,@L59        ; No!
+              ld    a,l
+              cp    0xE0           ; Check lower byte of address
+              jp    c,0x335F       ; Not the last line!
+              ld    a,(TTYPOS)     ; Load column pointer
+              push  af             ; Save column pointer on stack
+              ld    a,(LINE_STATUS) ; Load status of the first line
+              cp    0x81           ; Is it a double line?
+              jr    nz,@L60        ; No, scroll only one line
+              push  hl             ; Save cursor address
+              call  SCROLL_UP_ONE_LINE ; Scroll screen up one line
+              pop   hl             ; Restore cursor address
+              call  CURSOR_LINE_BACK ; Cursor address - 1 line (32 bytes)
+@L60:
+              push  hl             ; Save cursor address
+              call  SCROLL_UP_ONE_LINE ; Scroll screen up one line
+              pop   hl             ; Restore cursor address
+              call  CURSOR_LINE_BACK ; Cursor address - 1 line (32 bytes)
+              pop   af             ; Restore column pointer
+              ld    (TTYPOS),a     ; Restore original column pointer
+              pop   de             ; Restore return address
+              pop   hl             ; Restore status address
+              dec   hl             ; Status address - 1 line
+              push  hl             ; Status address on stack
+              push  de             ; Return address on stack
+              ret                  ; Done
+@L59:
+              ld    a,(TTYPOS)     ; Load column pointer
+              ld    c,a            ; Transfer to C
+              xor   a
+              ld    b,a            ; Clear B
+              sbc   hl,bc          ; Cursor address - column pointer = start of line
+              ld    bc,0x0040      ; Add 64 bytes (2 lines)
+              add   hl,bc          ; Start address of next line + 1 line
+              push  hl             ; Save start address
+              ex    de,hl          ; Destination in DE
+              ld    hl,0x7200      ; Screen RAM end address + 1
+              sbc   hl,de          ; Calculate bytes to shift: 0x7200 - DE
+              push  hl             ; Save byte count
+              pop   bc             ; Byte count in BC
+              ld    hl,0x71DF      ; Source address: 0x71DF (end of second to last line)
+              ld    de,0x71FF      ; Destination address: 0x71FF (end of last line)
+              ld    a,c
+              or    b              ; Check if byte count is zero
+              jr    z,@L61         ; If zero, no shift needed
+              lddr                 ; Shift screen contents down by one line
+@L61:
+              pop   hl             ; Restore line start address
+              call  CLRLINE_CHAR_GET ; Get clear-screen character in A, width in B (32)
+              nop   
+@L62:
+              ld    (de),a         ; Fill new line with clear character
+              dec   de             ; Address of previous character
+              djnz  @L62           ; Loop until line is cleared
+              call  GET_LINE_STATUS ; Get current line status
+              push  hl             ; Status address in BC
+              pop   bc             ; Restore to BC
+              ld    hl,0x7AE6      ; Last line status address
+              push  hl             ; Save last line status address
+              or    a
+              sbc   hl,bc          ; Calculate bytes to shift in status table
+              push  hl             ; Save byte count
+              pop   bc             ; Byte count in BC
+              pop   hl             ; Pop last line status address
+              push  hl             ; HL = source (last line status)
+              pop   de             ; DE = destination (last line status)
+              dec   hl             ; HL = second to last line status
+              lddr                 ; Shift status bytes down by one
+              ld    a,(0x7AE6)     ; Check status of last line
+              cp    0x81           ; Was it a double line?
+              ret   nz             ; No, done
+              ld    hl,(CURS_ADDR) ; Yes, load cursor address
+              jr    @L59           ; And scroll one more line down
+
+; DETERMINE LINE STATUS                                          
+; GET_LINE_STATUS: (defined in symbols.sym)
+              ld    a,(TTYPOS)     ; Load column pointer
+              ld    c,a            ; Transfer to C
+              xor   a
+              ld    b,a            ; Clear B
+              ld    hl,(CURS_ADDR) ; Load cursor address
+              sbc   hl,bc          ; HL = start of line
+              push  hl             ; Save start of line address
+              pop   bc             ; In BC
+              ld    a,b            ; Determine relative line number
+              and   0x0F           ; Relative page offset (0 or 1)
+              srl   a              ; Shift relative bit 8 into carry
+              ld    b,a            ; Clear B
+              rr    c              ; Shift relative address right (divide by 2)
+              srl   c              ; Divide by 4
+              srl   c              ; Divide by 8
+              srl   c              ; Divide by 16
+              srl   c              ; Divide by 32 (C = line number 0..15)
+              ld    hl,LINE_STATUS ; Start address of line status table
+              add   hl,bc          ; Add line number
+              ld    a,(hl)         ; Load line status
+              ret                  ; Done
+
+; RUBOUT (DELETE) CHARACTER FUNCTION                             
+; RUBOUT_CHAR: (defined in symbols.sym)
+              call  GET_LINE_STATUS ; Determine status of current line
+              cp    0x81           ; Is it the first of a double line?
+              ld    hl,(CURS_ADDR) ; Load cursor address
+              push  hl             ; Save cursor address
+              pop   de             ; Destination in DE
+              inc   hl             ; HL = next character position (source)
+              ld    a,(TTYPOS)     ; Load column pointer
+              ld    c,a            ; Transfer to C
+              jr    z,@L63         ; If double line, jump to double line handling
+              cp    0x1F           ; At the end of the line?
+              jr    z,@L64         ; Yes, just clear this character
+              ld    a,0x1F         ; Line width - 1
+@L65:
+              sub   c              ; Calculate remaining characters on line
+              ld    c,a            ; BC = count
+              xor   a
+              ld    b,a            ; Clear B
+              ldir                 ; Shift characters left by one
+@L64:
+              call  INSERT_BLANK_CHAR ; Fill end of line with space
+              call  GET_CURSOR_CHAR ; Save character at cursor position
+              ret                  ; Done
+@L63:
+              ld    a,0x3F         ; Double line width - 1
+              jr    @L65           ; Calculate count and shift over double line
+
+; SCROLL SCREEN UP ONE LINE AND CLEAR LAST LINE                  
+; SCROLL_UP_ONE_LINE: (defined in symbols.sym)
+              ld    de,0x7000      ; DE = start of screen (destination)
+              ld    hl,0x7020      ; HL = start of second line (source)
+              ld    bc,0x01E0      ; Count = 15 lines of 32 bytes (480 bytes)
+              ldir                 ; Scroll screen contents up by one line
+              call  CLRLINE_CHAR_GET ; Get clear-screen character in A, width in B (32)
+              nop   
+@L66:
+              ld    (de),a         ; Fill last line with space
+              inc   de             ; Address of next character
+              djnz  @L66           ; Loop until last line is cleared
+              ld    hl,LINE_STATUS ; Start of line status table
+              push  hl             ; Save status address
+              pop   de             ; DE = destination (line status 0)
+              inc   hl             ; HL = source (line status 1)
+              ld    bc,0x000F      ; Scroll 15 status bytes
+              ldir                 ; Shift status bytes up
+              ld    a,(de)         ; Load status of second to last line
+              cp    0x81           ; Was it a double line?
+              jr    nz,@L67        ; No, last line becomes single line (0x80)
+              xor   a              ; Yes, last line becomes follow-up line (0x00)
+              jr    @L68           ; Set status
+@L67:
+              ld    a,0x80         ; 80H = single line identifier
+@L68:
+              ld    (de),a         ; Set status of last line
+              xor   a
+              ld    (TTYPOS),a     ; Column pointer = 0
+              ld    hl,0x71E0      ; HL = start of last line
+              ret                  ; Done
+
+; SCROLL UP ONE OR TWO LINES DEPENDING ON LINE STATUS            
+; SCROLL_UP_BY_STATUS: (defined in symbols.sym)
+              ld    a,(LINE_STATUS) ; Load status of the first line
+              cp    0x81           ; Is it a double line?
+              call  z,SCROLL_UP_ONE_LINE ; Yes, scroll one line
+              call  SCROLL_UP_ONE_LINE ; Scroll one line
+              ret                  ; Done
+
+; EMIT AUDIBLE BEEP ON CHARACTER INPUT 
+; KEY_BEEP: (defined in symbols.sym)
+              ld    hl,FLAG2       ; Address Flag 2
+              or    a              ; Character entered?
+              jr    nz,@L69        ; Yes!
+              set   1,(hl)         ; No, set BUZZER flag
+              ld    bc,0x03FF      ; Load wait loop counter
+@L70:
+              dec   bc             ; Decrement BC
+              ld    a,c
+              or    b
+              jr    nz,@L70        ; Wait until end of vertical sync pulse
+              ret                  ; Done
+@L69:
+              bit   0,(hl)         ; Carriage Return flag set?
+              ret   nz             ; Yes, done
+              cp    0x0D           ; Character = Carriage Return (0x0D)?
+              jr    z,@L71         ; Yes!
+              cp    0x01           ; Character = BREAK (0x01)?
+              jr    nz,@L72        ; No!
+              set   2,(hl)         ; Yes, set BREAK flag
+@L71:
+              set   0,(hl)         ; Set Carriage Return flag
+@L72:
+              push  hl             ; Save Flag 2 address
+              ld    hl,0x00A0      ; Load beep frequency (0x00A0)
+              ld    bc,0x0006      ; Load beep duration (6)
+              call  SOUND_OUT      ; Emit beep tone
+              pop   hl             ; Restore Flag 2 address
+              ret                  ; Done
+
+; SOUND OUTPUT ROUTINE 
+; SOUND_OUT: (defined in symbols.sym)
+              ld    a,(OUT_LATCH)  ; Load I/O latch byte
+              ld    d,a            ; Transfer to D
+@L73:
+              call  SOUND_PULSE    ; Emit pulse
+              dec   bc             ; Decrement duration
+              ld    a,c
+              or    b
+              jr    nz,@L73        ; Loop until tone duration ends
+              ret                  ; Done
+; SOUND_PULSE: (defined in symbols.sym)
+              push  bc             ; Save duration counter
+              ld    a,d            ; Load I/O latch byte
+              xor   0x21           ; Toggle bits 0 and 5
+              ld    (0x6800),a     ; Write to I/O port
+              push  hl             ; Load frequency count
+              pop   bc
+@L74:
+              dec   bc             ; Decrement frequency counter
+              ld    a,c
+              or    b
+              jr    nz,@L74        ; Wait loop for lower half-cycle of tone
+              ld    a,d            ; Restore original I/O latch byte
+              ld    (0x6800),a     ; Write to I/O port
+              push  hl             ; Load frequency count
+              pop   bc
+@L75:
+              dec   bc             ; Decrement frequency counter
+              ld    a,c
+              or    b
+              jr    nz,@L75        ; Wait loop for upper half-cycle of tone
+              pop   bc             ; Restore duration counter
+              ret                  ; Done
+
+; PART OF THE INITIALIZATION ROUTINE
+; INIT_IO_LATCH_AND_BUFFERS: (defined in symbols.sym)
+              call  CTRL_KEY_CHECK_INIT ; Check if CTRL key is pressed and set color
+              ld    a,0x20         ; Default I/O latch byte
+              ld    (OUT_LATCH),a  ; Save default latch byte
+              ld    (0x6800),a     ; Write default to I/O port
+              ld    a,0x3C         ; Load blink timer value (60)
+              ld    (0x783A),a     ; Save blink timer
+              ld    a,0x10         ; Load blink counter value (16)
+              ld    (0x7841),a     ; Save blink counter
+              xor   a              ; Clear buffer index
+              ld    (0x7AAF),a     ; Save buffer size/index
+              ld    hl,0x7AB2      ; Start address of input buffer
+              ld    (0x7AB0),hl    ; Save input buffer pointer
+              ld    a,0xC9         ; RET instruction opcode
+              jp    INIT_COLOR_YELLOW ; Jump to color-set routine (yellow)
+              ret                  ; Not used
+
+; CSAVE - WRITE PROGRAM TO CASSETTE
+CSAVE:
+              di                   ; Disable interrupts
+              ld    c,0xF0         ; Set BASIC program identifier
+              call  TAPE_WRITE_LEADER_NAME ; Write tape leader and program name
+              jp    c,0x3AFE       ; If carry is set, BREAK was pressed
+              push  hl             ; Save program text pointer
+              ld    bc,0x019A      ; About 3 ms gap on tape
+@L1:
+              dec   bc             ; Decrement gap counter
+              ld    a,c            ; Test low byte of counter
+              or    b              ; Counter expired?
+              jr    nz,@L1         ; No, keep waiting
+              call  CHECK_BREAK_STOP ; Check whether BREAK was pressed
+              ld    ix,0x7823      ; Address checksum bytes
+              ld    hl,(PRGEND)    ; Load program start address
+              ld    a,l            ; Load LSB of start address
+              call  TAPE_WRITE_BYTE ; Write byte to cassette
+              ld    (ix+0x00),a    ; Store in checksum LSB
+              xor   a              ; Clear A for checksum MSB
+              ld    (ix+0x01),a    ; Clear checksum MSB
+              ld    a,h            ; Load MSB of start address
+              call  TAPE_WRITE_BYTE ; Write byte to cassette
+              call  TAPE_CALC_CHECKSUM ; Add byte to checksum
+              ex    de,hl          ; Move start address to DE
+              ld    hl,(0x78F9)    ; Load program end address
+              ld    a,l            ; Load LSB of end address
+              call  TAPE_WRITE_BYTE ; Write byte to cassette
+              call  TAPE_CALC_CHECKSUM ; Add byte to checksum
+              ld    a,h            ; Load MSB of end address
+              call  TAPE_WRITE_BYTE ; Write byte to cassette
+              call  TAPE_CALC_CHECKSUM ; Add byte to checksum
+              call  CHECK_BREAK_STOP ; Check whether BREAK was pressed
+@L2:
+              ld    a,(de)         ; Load next program byte
+              inc   de             ; Advance program address
+              call  TAPE_WRITE_BYTE ; Write program byte to cassette
+              call  TAPE_CALC_CHECKSUM ; Add byte to checksum
+              call  CHECK_BREAK_STOP ; Check whether BREAK was pressed
+              rst   0x18           ; Test whether program end was reached
+              jr    nz,@L2         ; No, write next byte
+              ld    a,(ix+0x00)    ; Load checksum LSB
+              call  TAPE_WRITE_BYTE ; Write checksum LSB to cassette
+              ld    a,(ix+0x01)    ; Load checksum MSB
+              call  TAPE_WRITE_BYTE ; Write checksum MSB to cassette
+              ld    b,0x14         ; 20 zero bytes mark the end
+              xor   a              ; A = 0 end marker byte
+@L3:
+              call  TAPE_WRITE_BYTE ; Write end marker byte
+              djnz  @L3            ; Loop until end markers are written
+              pop   hl             ; Restore program text pointer
+              ei                   ; Re-enable interrupts
+              ret                  ; Done
+
+; WRITE ONE BYTE TO CASSETTE
+TAPE_WRITE_BYTE:
+              push  af             ; Save A
+              push  bc             ; Save BC
+              push  hl             ; Save HL
+              ld    l,0x08         ; Set bit counter to 8
+              ld    h,a            ; H = byte to output
+@L1:
+              call  TAPE_CLOCK_PULSE ; Output clock pulse
+              rlc   h              ; Rotate next bit into carry
+              jr    nc,TAPE_WRITE_ZERO_BIT ; Carry clear means output a 0 bit
+              call  TAPE_CLOCK_PULSE ; Output first pulse of a 1 bit
+              call  TAPE_CLOCK_PULSE ; Output second pulse of a 1 bit
+              dec   l              ; Decrement bit counter
+              jr    nz,@L1         ; Loop for next bit
+              pop   hl             ; Restore HL
+              pop   bc             ; Restore BC
+              pop   af             ; Restore A
+              ret                  ; Done
+
+; Output a 0 bit
+TAPE_WRITE_ZERO_BIT:
+              ld    a,(OUT_LATCH)  ; Load I/O latch byte
+              or    0x06           ; Set bits 1 and 2
+              ld    (0x6800),a     ; Write latch byte to I/O port
+              ld    b,0x99         ; Pause about 555 us
+@L1:
+              djnz  @L1            ; Delay loop
+              and   0xF9           ; Clear bits 1 and 2 again
+              ld    (0x6800),a     ; Write latch byte to I/O port
+              ld    b,0x99         ; Pause about 555 us
+@L2:
+              djnz  @L2            ; Delay loop
+              jr    $-28           ; Continue with next bit
+
+; Output clock pulse
+TAPE_CLOCK_PULSE:
+              ld    a,(OUT_LATCH)  ; Load I/O latch byte
+              or    0x06           ; Set bits 1 and 2
+              ld    (0x6800),a     ; Write latch byte to I/O port
+              ld    b,0x4C         ; Pause about 277 us
+@L1:
+              djnz  @L1            ; Delay loop
+              and   0xF9           ; Clear bits 1 and 2 again
+              ld    (0x6800),a     ; Write latch byte to I/O port
+              ld    b,0x4C         ; Pause about 277 us
+@L2:
+              djnz  @L2            ; Delay loop
+              ret                  ; Done
+
+; WRITE CASSETTE LEADER AND NAME
+TAPE_WRITE_LEADER_NAME:
+              call  TAPE_BUFFER_NAME ; Copy program name into buffer
+              ld    b,0xFF         ; Output 255 synchronization bytes
+@L1:
+              ld    a,0x80         ; A = sync byte 0x80
+              call  TAPE_WRITE_BYTE ; Write byte to cassette
+              call  CHECK_BREAK    ; Check whether BREAK was pressed
+              ret   c              ; Abort if BREAK was pressed
+              djnz  @L1            ; Loop for 255 sync bytes
+              ld    b,0x05         ; Output five 0xFE leader bytes
+@L2:
+              ld    a,0xFE         ; A = leader byte 0xFE
+              call  TAPE_WRITE_BYTE ; Write byte to cassette
+              call  CHECK_BREAK    ; Check whether BREAK was pressed
+              ret   c              ; Abort if BREAK was pressed
+              djnz  @L2            ; Loop for leader bytes
+              ld    a,c            ; Load program/file identifier
+              call  TAPE_WRITE_BYTE ; Write identifier to cassette
+              call  CHECK_BREAK    ; Check whether BREAK was pressed
+              ret   c              ; Abort if BREAK was pressed
+              ld    a,(0x7AD6)     ; Load program name length
+              ld    b,a            ; Use length as counter
+              ld    de,0x7A9D      ; Point DE to name buffer
+@L3:
+              ld    a,(de)         ; Load next name character
+              inc   de             ; Advance name pointer
+              call  TAPE_WRITE_BYTE ; Write character to cassette
+              djnz  @L3            ; Loop until the name is complete
+              ret                  ; Done
+
+; CHECK AND BUFFER PROGRAM/FILE NAME
+TAPE_BUFFER_NAME:
+              ld    b,0x10         ; Maximum name length is 16 chars
+              ld    de,0x7A9D      ; Load start address of name buffer
+              ld    a,(hl)         ; Load character from program text
+              cp    0x3A           ; End of statement?
+              jr    z,@L1          ; Yes, finish name
+              or    a              ; End of line?
+              jr    z,@L1          ; Yes, finish name
+              rst   8              ; Check for opening quote
+              ld    (0xB77E),hl    ; Embedded quote-check operand bytes
+              jr    z,@L1          ; If no name follows, finish
+              inc   hl             ; Advance program text pointer
+              cp    0x22           ; End of string?
+              jr    z,@L1          ; Yes, finish name
+              ld    (de),a         ; Copy character into buffer
+              inc   de             ; Advance buffer pointer
+              djnz  $-11           ; Loop for next character
+@L1:
+              xor   a              ; Use 0x00 as terminator
+              ld    (de),a         ; Store terminator in buffer
+              ld    a,0x11         ; Start with max length plus terminator
+              sub   b              ; Calculate actual name length
+              ld    (0x7AD6),a     ; Save name length
+              ret                  ; Done
+
+; PREPARE CASSETTE LOAD MESSAGES
+TAPE_PREPARE_MESSAGES:
+              ld    a,(0x784C)     ; Load message-output flag
+              or    a              ; Messages disabled?
+              ret   nz             ; Yes, suppress messages
+              ld    a,(OUT_LATCH)  ; Load I/O latch byte
+              bit   3,a            ; Graphics mode active?
+              jr    z,@L1          ; No, skip mode switch
+              and   0xF7           ; Switch to text mode
+              ld    (OUT_LATCH),a  ; Save updated latch byte
+              ld    (0x6800),a     ; Write latch byte to I/O port
+              call  OUT_SCREEN_CLS ; Clear the screen
+@L1:
+              ld    hl,0x71FF      ; Set cursor to last screen position
+              ld    (CURS_ADDR),hl ; Save cursor address
+              ld    a,0x1F         ; Set column pointer to last column
+              ld    (TTYPOS),a     ; Save column pointer
+              ld    a,(0x7AE5)     ; Load status of previous line
+              cp    0x81           ; Is it a double line?
+              ret   nz             ; No, done
+              dec   a              ; Mark last lines as single lines
+              ld    (0x7AE5),a     ; Store status for previous line
+              ld    (0x7AE6),a     ; Store status for last line
+              ret                  ; Done
+
+; SEARCH FOR PROGRAM START ON CASSETTE
+TAPE_FIND_PROGRAM:
+              ld    hl,0x3842      ; Load address of WAITING text
+              call  TAPE_PRINT_MSG ; Output text if messages are enabled
+@L1:
+              call  CHECK_BREAK_STOP ; Check whether BREAK was pressed
+              ld    a,(0x6800)     ; Read I/O byte
+              bit   6,a            ; Evaluate cassette pulse input
+              jr    nz,@L1         ; No pulse, keep waiting
+@L2:
+              call  TAPE_READ_BIT  ; Read one bit
+              jr    c,@L1          ; Timed out, restart search
+              bit   0,a            ; Was the bit a 1?
+              jr    z,@L2          ; No, read next bit
+              ld    b,0x07         ; Read seven more bits
+@L3:
+              call  TAPE_READ_BIT  ; Read one bit
+              jr    c,@L1          ; Timeout, restart search
+              djnz  @L3            ; Loop for next bit
+              cp    0x80           ; Is this a sync byte?
+              jr    nz,@L1         ; No, keep searching
+
+; Advance tape past the sync bytes
+@L4:
+              call  TAPE_READ_BYTE ; Read next byte
+              jp    c,0x35E7       ; Timeout, restart search
+              cp    0x80           ; Still a sync byte?
+              jr    z,@L4          ; Yes, read next byte
+
+; The next five bytes must be 0xFE
+              ld    b,0x04         ; Four bytes remain; first already loaded
+@L5:
+              cp    0xFE           ; Is this a leader byte?
+              jp    nz,0x35E7      ; No, restart search
+              call  TAPE_READ_BYTE ; Read next byte
+              jp    c,0x35E7       ; Timeout, restart search
+              djnz  @L5            ; Check remaining leader bytes
+
+; Read program identifier
+              call  TAPE_READ_BYTE ; Read identifier byte
+              ld    (SOUND_NOTE_VALUE),a ; Save identifier byte
+
+; Read name and copy it into the buffer
+              ld    hl,0x7AB2      ; Load destination buffer address
+              ld    b,0x12         ; Maximum length is 18 bytes
+@L7:
+              call  TAPE_READ_BYTE ; Read next byte
+              ld    (hl),a         ; Store byte in buffer
+              or    a              ; End of name?
+              jr    z,@L6          ; Yes, name is complete
+              inc   hl             ; Advance buffer pointer
+              djnz  @L7            ; Loop for next name byte
+              jp    0x35E7         ; Name too long; restart search
+
+; Output FOUND message
+@L6:
+              ld    hl,0x385A      ; Address FOUND text
+              call  TAPE_PRINT_MSG ; Output FOUND text
+              ld    hl,0x7AB2      ; Address name in buffer
+              call  TAPE_PRINT_NAME ; Output the found name
+
+; Check whether this is the requested program
+              ld    hl,0x7AB2      ; Address received name
+              ld    de,0x7A9D      ; Address requested name
+@L8:
+              ld    a,(de)         ; Load byte from requested name
+              or    a              ; End of requested name?
+              ret   z              ; Yes, this program matches
+              cp    (hl)           ; Compare with received name byte
+              jp    nz,0x35E7      ; Mismatch, keep searching
+              inc   hl             ; Advance received-name pointer
+              inc   de             ; Advance requested-name pointer
+              jr    @L8            ; Check next character
+              ret                  ; Not used
+
+; CLOAD - READ PROGRAM FROM CASSETTE
+CLOAD:
+              push  hl             ; Save program text pointer
+              ld    hl,FLAG2       ; Address Flag 2
+              res   6,(hl)         ; Clear CRUN flag
+              res   3,(hl)         ; Clear VERIFY flag
+              pop   hl             ; Restore program text pointer
+
+; Common code used by CLOAD, CRUN, and VERIFY
+TAPE_LOAD_COMMON:
+              di                   ; Disable interrupts
+              call  TAPE_BUFFER_NAME ; Copy name from program text
+              push  hl             ; Save program text pointer
+              call  TAPE_PREPARE_MESSAGES ; Prepare message output
+              ld    hl,0x3842      ; Address WAITING text
+              call  TAPE_PRINT_MSG ; Output WAITING text
+@L1:
+              call  0x35E7         ; Search for program on cassette
+              ld    a,(SOUND_NOTE_VALUE) ; Load program identifier
+              cp    0xF2           ; Is it plain data?
+              jr    z,@L1          ; Yes, keep searching
+              ld    hl,0x3860      ; Address LOADING text
+              call  0x3804         ; Output LOADING text
+              ld    ix,0x7823      ; Address checksum bytes
+              call  TAPE_READ_ADDRS ; Read start and end addresses
+              jp    c,TAPE_LOAD_ERROR ; On error, print LOADING ERROR
+              push  hl             ; Save end address
+              sbc   hl,de          ; Compute byte count: end - start
+              jp    c,TAPE_LOAD_ERROR ; Error if start is after end
+              ld    (0x781E),de    ; Save start address
+              push  hl             ; Move byte count into BC
+              pop   bc             ; BC = byte count
+              pop   hl             ; Restore end address
+              ld    a,(FLAG2)      ; Load Flag 2
+              bit   3,a            ; VERIFY flag set?
+              jp    nz,VERIFY_COMPARE ; Yes, compare against memory
+@L2:
+              call  TAPE_READ_BYTE_CHECKED ; Read byte from cassette
+              ld    (de),a         ; Store byte in RAM
+              call  TAPE_CALC_CHECKSUM ; Add byte to checksum
+              inc   de             ; Advance program address
+              dec   bc             ; Decrement byte count
+              ld    a,c            ; Test low byte of count
+              or    b              ; Any bytes left?
+              jr    nz,@L2         ; Yes, continue loading
+              call  TAPE_READ_BYTE ; Read checksum LSB
+              cp    (ix+0x00)      ; Compare with calculated checksum LSB
+              jp    nz,TAPE_LOAD_ERROR ; Mismatch, print LOADING ERROR
+              call  TAPE_READ_BYTE ; Read checksum MSB
+              cp    (ix+0x01)      ; Compare with calculated checksum MSB
+              jp    nz,TAPE_LOAD_ERROR ; Mismatch, print LOADING ERROR
+              ld    (0x78F9),hl    ; Save program end address
+              ei                   ; Re-enable interrupts
+              ld    a,0x0D         ; Output carriage return
+              call  OUT_BUF_CHAR   ; Send character to output buffer
+              ld    a,(SOUND_NOTE_VALUE) ; Load program identifier
+              cp    0xF1           ; Is it a machine-code program?
+              jr    nz,@L3         ; No, continue as BASIC program
+
+; Start machine-code program
+              ld    hl,(0x781E)    ; Load start address
+              jp    (hl)           ; Jump to machine-code program
+
+; BASIC program
+@L3:
+              ld    hl,MSG_READY_TEXT ; Address READY text
+              call  OUTSTR         ; Output READY text
+              ld    hl,(PRGEND)    ; Load BASIC program start address
+              push  hl             ; Save it on the stack
+              ld    hl,FLAG2       ; Address Flag 2
+              bit   6,(hl)         ; CRUN flag set?
+              jr    nz,@L4         ; Yes, start the program
+              jp    0x1AE8         ; No, return to the main loop
+
+; Start BASIC program
+@L4:
+              ld    hl,FLAG2       ; Address Flag 2
+              res   6,(hl)         ; Clear CRUN flag
+              pop   de             ; Load program start address
+              call  RENEW_LINE_PTRS ; Renew BASIC line pointers
+              call  0x79B5         ; RAM expansion output hook
+              call  VRESET         ; Clear variable table
+              call  0x79B8         ; RAM expansion output hook
+              ld    hl,0xFFFF      ; Set current line number to direct mode
+              ld    (0x78A2),hl    ; Save current line number
+              ld    hl,0x79E8      ; Address I/O buffer
+              ld    de,0x0570      ; Address RUN command text
+@L6:
+              ld    a,(de)         ; Load next RUN command byte
+              ld    (hl),a         ; Copy byte into I/O buffer
+              or    a              ; End of command text?
+              jr    z,@L5          ; Yes, command is complete
+              inc   hl             ; Advance buffer pointer
+              inc   de             ; Advance command text pointer
+              jr    @L6            ; Copy next byte
+@L5:
+              ld    hl,0x79E7      ; Address one byte before I/O buffer
+              xor   a              ; Clear A
+              jp    0x1A81         ; Execute the RUN command
+
+; Print loading error message
+; TAPE_LOAD_ERROR: (defined in symbols.sym)
+              ld    hl,0x384A      ; Address 'LOADING ERROR' text
+              ei                   ; Enable interrupts
+              call  OUTSTR         ; Print text
+              di                   ; Disable interrupts
+              ld    a,(0x784C)     ; Load message-output flag
+              or    a              ; Is it zero?
+              jp    nz,0x3667      ; No, suppress further text output
+              ld    hl,0x71FF      ; Set cursor to last character position
+              ld    (CURS_ADDR),hl ; Save cursor address
+              ld    a,0x1F         ; Column pointer to last column (31)
+              ld    (TTYPOS),a     ; Save TTY position
+              jp    0x3667         ; Try again
+
+; CRUN command - load and run a program
+; CMD_CRUN: (defined in symbols.sym)
+              push  hl             ; Save program pointer on stack
+              ld    hl,FLAG2       ; Address Flag 2
+              set   6,(hl)         ; Set CRUN flag
+              pop   hl             ; Restore program pointer
+              jp    TAPE_LOAD_COMMON ; Jump to common tape load routine
+
+; VERIFY command - check a program on cassette
+; CMD_VERIFY: (defined in symbols.sym)
+              push  hl             ; Save program pointer on stack
+              ld    hl,FLAG2       ; Address Flag 2
+              set   3,(hl)         ; Set VERIFY flag
+              pop   hl             ; Restore program pointer
+              jp    TAPE_LOAD_COMMON ; Jump to common tape load routine
+
+; VERIFY continuation after common routine with CLOAD
+; VERIFY_COMPARE: (defined in symbols.sym)
+              ex    de,hl          ; HL = program start address
+@L8:
+              call  TAPE_READ_BYTE ; Read byte from cassette
+              cp    (hl)           ; Match with program byte?
+              jr    z,@L7          ; Yes, matches
+              ld    hl,0x376C      ; Address 'VERIFY ' text
+              call  OUTSTR         ; Print text
+              jp    0x0183         ; Print 'ERROR' and return
+@L7:
+              inc   hl             ; Increment program address
+              dec   bc             ; Decrement byte counter
+              ld    a,c            ; Is counter zero?
+              or    b              ; Is counter zero?
+              jr    nz,@L8         ; No, compare next byte
+              ld    hl,FLAG2       ; Address Flag 2
+              res   3,(hl)         ; Clear VERIFY flag
+              ld    hl,0x376C      ; Address 'VERIFY ' text
+              call  OUTSTR         ; Print text
+              ld    hl,0x0380      ; Address 'OK' text
+              call  OUTSTR         ; Print text
+              jp    0x36CF         ; Return to BASIC
+              DEFB  0x0D,0x56,0x45,0x52,0x49,0x46,0x59,0x20 ; Text definition 'VERIFY '
+              DEFB  0x00
+
+; Read byte from cassette. Output: A = read byte, Carry set on read error.
+; TAPE_READ_BYTE: (defined in symbols.sym)
+              push  bc             ; Save BC
+              push  de             ; Save DE
+              ld    b,0x08         ; Bit counter = 8
+@L10:
+              call  TAPE_READ_BIT  ; Read one bit
+              jr    c,@L9          ; Read error!
+              djnz  @L10           ; Read next bit
+              pop   de             ; Restore DE
+              pop   bc             ; Restore BC
+              ld    (0x7AD3),a     ; Save read byte temporarily
+              call  CHECK_BREAK_STOP ; Check for BREAK key
+              ld    a,(0x7AD3)     ; Restore read byte
+              ret                  ; Return
+@L9:
+              pop   de             ; Restore DE (error exit)
+              pop   bc             ; Restore BC (error exit)
+              ret                  ; Return with error (Carry set)
+
+; Read bit from cassette
+; TAPE_READ_BIT: (defined in symbols.sym)
+              push  bc             ; Save BC
+@L16:
+              ld    bc,0x07FF      ; Timeout limit value
+@L12:
+              ld    a,(0x6800)     ; Load I/O port
+              bit   6,a            ; Signal level high?
+              jr    z,@L11         ; Yes, continue
+              dec   bc             ; Decrement timeout counter
+              ld    a,c            ; Timeout reached?
+              or    b              ; Timeout reached?
+              jr    nz,@L12        ; No, keep reading
+              pop   bc             ; Restore BC
+              scf                  ; Set Carry flag (error)
+              ret                  ; Return with error
+
+; Verify clock pulse stability
+@L11:
+              ld    a,(0x6800)     ; Load I/O port
+              bit   6,a            ; Signal level high?
+              jr    nz,@L12        ; Yes, signal low pulse was too short!
+              ld    a,(0x6800)     ; Load I/O port
+              bit   6,a            ; Signal level high?
+              jr    nz,@L12        ; Yes, signal low pulse still too short!
+              ld    b,0x52         ; Delay counter for ~130 us
+@L13:
+              djnz  @L13           ; Delay loop to skip negative pulse
+              ld    a,(0x6800)     ; Load I/O port
+              bit   6,a            ; Is signal level high now?
+              jr    nz,@L14        ; Yes, valid clock pulse
+@L15:
+              ld    a,(0x6800)     ; Load I/O port
+              bit   6,a            ; Signal level transition?
+              jr    z,@L15         ; Wait for end of pulse
+              jr    @L16           ; Not a valid clock pulse
+
+; Measure pulse count. Result: 0 or 1 bit collected into D.
+@L14:
+              ld    b,0x5A         ; Timeout delay counter
+              ld    c,0x00         ; Clear pulse counter
+@L18:
+              ld    a,(0x6800)     ; Read I/O port
+              bit   6,a            ; Wait for negative edge
+              jr    z,@L17         ; Edge detected!
+@L19:
+              djnz  @L18           ; Keep waiting/reading
+@L21:
+              ld    a,c            ; Pulse count to A
+              dec   a              ; Subtract 1
+              rra                  ; Shift LSB into Carry
+              rl    d              ; Shift Carry bit into D (assemble byte)
+              pop   bc             ; Restore BC
+              ld    a,d            ; Transfer assembled byte to A
+              or    a              ; Clear Carry flag
+              ret                  ; Return
+
+; Check pulse stability and wait for possible second pulse
+@L17:
+              ld    a,(0x6800)     ; Load I/O port
+              bit   6,a            ; High level again?
+              jr    nz,@L19        ; Yes, pulse too short!
+              ld    a,(0x6800)     ; Load I/O port
+              bit   6,a            ; High level again?
+              jr    nz,@L19        ; Yes, still too short!
+              inc   c              ; Increment pulse counter
+@L20:
+              ld    a,(0x6800)     ; Load I/O port
+              bit   6,a            ; End of pulse?
+              jr    nz,@L19        ; Yes, measure second pulse
+              djnz  @L20           ; Timeout reached?
+              jr    @L21           ; Yes, evaluate pulse count
+
+; Clear last screen line and print message
+; TAPE_PRINT_MSG: (defined in symbols.sym)
+              ld    a,(0x784C)     ; Load message-output flag
+              or    a              ; Is it zero?
+              ret   nz             ; No, suppress output
+              ld    de,0x71E0      ; Address start of last line
+              ld    b,0x20         ; Line length (32) as counter
+@L22:
+              call  INSERT_BLANK_CHAR ; Fill last line with spaces
+              inc   de             ; Advance screen address
+              djnz  @L22           ; Loop for entire line
+              ld    a,(0x784C)     ; Load message-output flag
+              or    a              ; Is it zero?
+              ret   nz             ; No, suppress output
+              call  TAPE_MSG_PRINT_BG ; Print character (may invert depending on background)
+@L23:
+              ld    a,(hl)         ; Load text character
+              or    a              ; End of text? (Null terminator)
+              ret   z              ; Yes, finished
+              ld    (de),a         ; Copy character to screen
+              inc   de             ; Advance screen address
+              inc   hl             ; Advance text pointer
+              jr    @L23           ; Copy next character
+
+; Print program/file identifier and name
+; TAPE_PRINT_NAME: (defined in symbols.sym)
+              ld    a,(0x784C)     ; Load message-output flag
+              or    a              ; Is it zero?
+              ret   nz             ; No, suppress output
+              ld    de,0x71E9      ; Address name position in last line
+              push  hl             ; Save name address
+              ld    a,(SOUND_NOTE_VALUE) ; Load program identifier
+              and   0x0F           ; Clear upper nibble
+              ld    hl,0x383F      ; Address identifier table
+              add   a,l            ; Offset into table
+              ld    l,a
+              ld    a,0x00
+              adc   a,h
+              ld    h,a
+              call  TAPE_ID_PRINT_BG ; Print identifier character
+              nop                  ; Unused
+              nop                  ; Unused
+              ld    (de),a         ; Print space as separator
+              inc   de             ; Advance screen address by 2
+              inc   de
+              pop   hl             ; Load name address
+@L24:
+              ld    a,(hl)         ; Load character from name
+              or    a              ; End of name?
+              ret   z              ; Yes, finished
+              call  TAPE_NAME_PRINT_BG ; Print character depending on background
+              inc   de             ; Advance screen address
+              inc   hl             ; Advance name pointer
+              jr    @L24           ; Print next character
+              ret                  ; Return
+              DEFB  0x14,0x02,0x04 ; Codes for tape file types (B, D, S)
+
+; Cassette Routine Messages
+              DEFM  "WAITING"
+              DEFB  0x00,0x0D
+              DEFM  "LOADING ERROR"
+              DEFB  0x0D,0x00
+              DEFM  "FOUND"
+              DEFB  0x00
+              DEFM  "LOADING"
+              DEFB  0x00
+
+; Read start and end addresses from cassette
+; TAPE_READ_ADDRS: (defined in symbols.sym)
+              call  TAPE_READ_BYTE ; Read byte
+              ret   c              ; Return on read error
+              ld    e,a            ; E = LSB of start address
+              ld    (ix+0x00),a    ; Initialize LSB of checksum
+              xor   a              ; A = 0
+              ld    (ix+0x01),a    ; Initialize MSB of checksum to 0
+              call  TAPE_READ_BYTE ; Read byte
+              ret   c              ; Return on read error
+              ld    d,a            ; D = MSB of start address
+              call  TAPE_CALC_CHECKSUM ; Add byte to checksum
+              call  TAPE_READ_BYTE ; Read byte
+              ret   c              ; Return on read error
+              ld    l,a            ; L = LSB of end address
+              call  TAPE_CALC_CHECKSUM ; Add byte to checksum
+              call  TAPE_READ_BYTE ; Read byte
+              ret   c              ; Return on read error
+              ld    h,a            ; H = MSB of end address
+              call  TAPE_CALC_CHECKSUM ; Add byte to checksum
+              or    a              ; Clear Carry flag
+              ret                  ; Return
+
+; Update checksum. Input: IX = pointer to 16-bit checksum, A = byte to add.
+; TAPE_CALC_CHECKSUM: (defined in symbols.sym)
+              add   a,(ix+0x00)    ; Add byte to LSB of checksum
+              ld    (ix+0x00),a    ; Save updated LSB
+              ld    a,0x00         ; A = 0
+              adc   a,(ix+0x01)    ; Add Carry to MSB of checksum
+              ld    (ix+0x01),a    ; Save updated MSB
+              ret                  ; Return
+
+; COLOR command
+; CMD_COLOR: (defined in symbols.sym)
+              ld    a,(hl)         ; Load next command character
+              cp    0x2C           ; Is it a comma?
+              jr    z,@L25         ; Yes, change background color only
+              call  GETBYT         ; Evaluate expression
+              or    a              ; Is foreground color code 0?
+              jp    z,0x1E4A       ; Yes, Function Code Error
+              cp    0x09           ; Is color code >= 9?
+              jp    nc,0x1E4A      ; Yes, Function Code Error
+              dec   a              ; Color code - 1 (0 to 7)
+              and   0x07           ; Limit to range 0-7
+              sla   a              ; Shift into upper nibble (multiply by 16)
+              sla   a
+              sla   a
+              sla   a
+              ld    (0x7846),a     ; Save foreground color
+              ld    a,(hl)         ; Load next character
+              or    a              ; End of line?
+              ret   z              ; Yes, finished
+              cp    0x3A           ; End of statement? (':')
+              ret   z              ; Yes, finished
+@L25:
+              rst   8              ; Expect comma
+              inc   l              ; Parameter: ','
+              call  GETBYT         ; Evaluate expression
+              or    a              ; Is color code 0?
+              jr    nz,@L26        ; No, select red background
+              ld    a,(OUT_LATCH)  ; Load I/O latch byte
+              res   4,a            ; Clear background color bit (green)
+              ld    (OUT_LATCH),a  ; Save updated latch byte
+              ld    (0x6800),a     ; Output to I/O port
+              ret                  ; Return
+@L26:
+              cp    0x01           ; Is color code 1?
+              jp    nz,0x1E4A      ; No, Function Code Error
+              ld    a,(OUT_LATCH)  ; Load I/O latch byte
+              set   4,a            ; Set background color bit (red)
+              ld    (OUT_LATCH),a  ; Save updated latch byte
+              ld    (0x6800),a     ; Output to I/O port
+              ret                  ; Return
+
+; Supplementary routine for the POINT function
+; POINT_HELPER: (defined in symbols.sym)
+              ld    c,0xC0         ; Load 2-bit pixel mask
+@L27:
+              rrc   c              ; Shift mask to right
+              djnz  @L27           ; Repeat according to pixel position
+              ld    a,(de)         ; Load byte from graphics RAM
+              and   c              ; Mask the pixel bits
+              ld    b,a            ; Save pixel value in B
+              ld    a,c            ; Load mask into A
+@L28:
+              rrc   b              ; Shift pixel value right
+              rrc   a
+              cp    0x03           ; Is mask at rightmost position?
+              jr    nz,@L28        ; No, keep shifting
+              ld    a,b            ; Load color code from B
+              inc   a              ; Add 1 for result (1-4)
+              push  hl             ; Save program pointer
+              call  CONIA          ; Convert color code to floating point
+              pop   hl             ; Restore program pointer
+              jp    0x390F         ; Check for closing parenthesis
+
+; Supplementary routine for the SET and RESET statements
+; SET_RESET_HELPER: (defined in symbols.sym)
+              ld    b,a            ; Copy SET mask to B
+              ld    a,(de)         ; Load byte from graphics RAM
+              and   c              ; Clear bits for addressed pixel
+              ld    (de),a         ; Write byte back
+              pop   af             ; Load statement flag (SET/RESET)
+              or    a              ; Is it RESET statement?
+              jp    p,0x390F       ; Yes, finished
+              ld    a,(de)         ; SET statement, load byte again
+              or    b              ; Set bits for addressed pixel
+              ld    (de),a         ; Write byte back
+              rst   8              ; Expect closing parenthesis
+              add   hl,hl          ; Parameter: ')'
+              ret                  ; Return
+
+; COPY command
+; CMD_COPY: (defined in symbols.sym)
+              di                   ; Disable interrupts
+              push  hl             ; Save program pointer on stack
+              ld    a,(OUT_LATCH)  ; Load I/O latch byte
+              bit   3,a            ; Is machine in graphics mode?
+              jp    nz,COPY_GFX    ; Yes, graphics output
+              ld    hl,0x7000      ; Screen start address
+              ld    c,0x10         ; Line counter = 16
+@L32:
+              ld    b,0x20         ; Column counter = 32
+@L31:
+              ld    a,(hl)         ; Load character from screen RAM
+              or    a              ; Block graphics character?
+              jp    p,0x392D       ; No
+              call  PRN_GFX_CHAR   ; Yes, output block graphics character
+              jr    @L29           ; Continue
+              jp    COPY_CHAR_BG   ; Output plain text character to printer
+              nop                  ; Unused
+              and   0x3F           ; Clear bits 6 and 7
+              call  PRN_INV_CHAR   ; Output inverted character
+              jr    @L29           ; Continue
+              and   0x3F           ; Clear bits 6 and 7
+              bit   5,a            ; Test bit 5 (inverted?)
+              jr    nz,@L30        ; No, skip
+              or    0x40           ; Yes, add 0x40 for real ASCII character
+@L30:
+              call  PRN_CHAR_OUT   ; Output character to printer
+@L29:
+              inc   hl             ; Advance screen address
+              djnz  @L31           ; End of row?
+              ld    a,0x0D         ; Output carriage return
+              call  PRN_CHAR_OUT   ; Send CR to printer
+              call  CHECK_BREAK_STOP ; BREAK key pressed?
+              dec   c              ; Line counter - 1
+              ld    a,c            ; Finished?
+              or    a              ; Finished?
+              jr    nz,@L32        ; No, process next line
+              pop   hl             ; Restore program pointer
+              ei                   ; Enable interrupts
+              ret                  ; Return
+
+; Output inverted character to printer
+; PRN_INV_CHAR: (defined in symbols.sym)
+              push  af             ; Save AF
+              push  bc             ; Save BC
+              push  de             ; Save DE
+              push  hl             ; Save HL
+              ld    l,a            ; Character code as HL offset
+              ld    h,0x00         ; H = 0
+              ld    a,0x08         ; Switch printer to graphics mode (code 0x08)
+              call  PRN_CHAR_OUT   ; Output 0x08 to printer
+              ld    b,0x04         ; Loop counter = 4 (multiply char by 5)
+              push  hl             ; HL = character code
+              pop   de
+              or    a              ; Clear carry
+@L33:
+              adc   hl,de          ; HL = HL + HL (multiply)
+              djnz  @L33           ; Repeat 4 times (multiply by 5 total)
+              push  hl             ; Result (char * 5) into BC
+              pop   bc             ; BC = char offset
+              ld    hl,PRN_GFX_FONT ; Base address of printer font table
+              add   hl,bc          ; HL = font entry address
+              ld    a,0xFF         ; Output all-ones byte (1 dot column left margin)
+              call  PRN_CHAR_OUT   ; Send to printer
+              ld    b,0x05         ; Loop counter = 5 (5 bytes per character)
+@L34:
+              ld    a,(hl)         ; Load font byte
+              inc   hl             ; Advance font pointer
+              call  PRN_CHAR_OUT   ; Send font byte to printer
+              djnz  @L34           ; All 5 bytes output?
+              ld    a,0xFF         ; Output all-ones byte (1 dot column right margin)
+              call  PRN_CHAR_OUT   ; Send to printer
+              ld    a,0x0F         ; Switch printer back to text mode (code 0x0F)
+              call  PRN_CHAR_OUT   ; Send to printer
+              pop   hl             ; Restore HL
+              pop   de             ; Restore DE
+              pop   bc             ; Restore BC
+              pop   af             ; Restore AF
+              ret                  ; Return
+
+; COPY output in graphics mode
+; COPY_GFX: (defined in symbols.sym)
+              xor   a              ; Reset interval counter
+              ld    (0x7AD6),a     ; Save to interval counter (LSB)
+              ld    (0x7AD6),a     ; Save to interval counter (MSB)
+              ld    a,0x08         ; Switch printer to graphics mode (code 0x08)
+              call  PRN_CHAR_OUT   ; Send to printer
+              ld    ix,SOUND_NOTE_VALUE ; Load address of graphics buffer (SOUND_NOTE_VALUE area)
+              ld    hl,0x7000      ; Screen start address
+              ld    de,START       ; DE = 0 (print pattern)
+              ld    c,0xC0         ; Shift mask bits 6,7 set
+@L40:
+              call  CHECK_BREAK_STOP ; BREAK key pressed?
+              push  hl             ; Save screen address on stack
+              call  PRN_GFXBUF_CLEAR ; Clear graphics buffer
+              ld    b,0x03         ; Line counter = 3 (combine 3 rows)
+              ld    a,(hl)         ; Load byte from screen RAM
+              and   c              ; Select pixel with shift mask
+              push  bc             ; Save counter and shift mask
+              ld    b,a            ; Selected pixel value into B
+              rrc   b              ; Rotate pixel value right
+              rrc   b              ; Rotate pixel value right
+              rrc   c              ; Rotate shift mask right
+              rrc   c              ; Rotate shift mask right
+              ld    a,c            ; Check if shift mask is right-aligned
+              cp    0x03           ; Is shift mask right-aligned?
+              jp    nz,0x39B3      ; No, keep shifting
+              ld    a,b            ; Pixel value back to A
+              pop   bc             ; Restore counter and shift mask
+              cp    0x03           ; Pixel color = red (3)?
+              jr    z,@L35         ; Yes!
+              cp    0x02           ; Pixel color = blue (2)?
+              jr    z,@L36         ; Yes!
+              cp    0x01           ; Pixel color = green (1)?
+              jr    z,@L37         ; Yes!
+              ld    de,START       ; Green: print pattern = 0x0000
+              jr    @L38           ; Continue
+@L35:
+              ld    de,0xE0E0      ; Red: print pattern = 0xE0E0
+              jr    @L38           ; Continue
+@L36:
+              ld    d,0x40         ; Blue: print pattern D = 0x40
+              ld    e,0xA0         ; Blue: print pattern E = 0xA0
+              jr    @L38           ; Continue
+@L37:
+              ld    d,0xA0         ; Yellow: print pattern D = 0xA0
+              ld    e,0x40         ; Yellow: print pattern E = 0x40
+@L38:
+              ld    a,(ix+0x00)    ; Load byte 0 from buffer
+              srl   a              ; Shift right 3 bits (previous row contribution)
+              srl   a              ; Shift right
+              srl   a              ; Shift right
+              push  hl             ; Save screen address
+              ld    hl,0x7AD3      ; Point to buffer byte 0
+              call  COPY_CARRY_SET ; Carry bit into buffer byte 0
+              pop   hl             ; Restore screen address
+              or    d              ; Merge with D print pattern
+              ld    (ix+0x00),a    ; Write byte 0 back to buffer
+              ld    a,(ix+0x02)    ; Load byte 2 from buffer
+              srl   a              ; Shift right 3 bits
+              srl   a              ; Shift right
+              srl   a              ; Shift right
+              push  hl             ; Save screen address
+              ld    hl,0x7AD5      ; Point to buffer byte 2
+              call  COPY_CARRY_SET ; Carry bit into buffer byte 2
+              pop   hl             ; Restore screen address
+              or    e              ; Merge with E print pattern
+              ld    (ix+0x02),a    ; Write byte 2 back to buffer
+              ld    a,0x20         ; HL = HL + 32 (advance to next screen row)
+              add   a,l            ; Add 32 to L
+              ld    l,a            ; HL L updated
+              ld    a,0x00         ; Carry into H
+              adc   a,h            ; Add carry
+              ld    h,a            ; H updated
+              djnz  @L39           ; 3 rows combined?
+              call  PRN_OUTPUT_BUF ; Yes, output the buffer
+              pop   hl             ; Restore screen address
+              srl   c              ; Shift mask 2 bits right
+              srl   c              ; Shift mask 2 bits right
+              ld    a,c            ; Shift mask zero?
+              or    a              ; Shift mask zero?
+              jr    nz,@L40        ; No, process next pixel in same byte
+              inc   hl             ; Yes, advance screen address by 1
+              ld    a,l            ; End of screen row?
+              and   0x1F           ; Check column count
+              jp    nz,0x39A4      ; No, process next screen byte
+              call  PRN_CR_LF      ; Output CR/LF for new line
+              ld    a,(0x7AD6)     ; Load interval counter
+              inc   a              ; Increment interval counter
+              cp    0x03           ; Is it row 3?
+              jr    nz,@L41        ; Not yet
+              xor   a              ; Yes, reset interval counter to 0
+@L41:
+              ld    (0x7AD6),a     ; Save updated interval counter
+              jr    nz,@L42        ; If non-zero, advance by 2 rows
+              ld    a,0x40         ; 2-row advance: offset = 64
+              jr    @L43           ; Skip to 1-row advance
+@L42:
+              ld    a,0x20         ; 1-row advance: offset = 32
+@L43:
+              add   a,l            ; Add offset to HL
+              ld    l,a            ; Update L
+              ld    a,0x00         ; Carry
+              adc   a,h            ; ADC carry
+              ld    h,a            ; Update H
+              cp    0x78           ; Is H >= 0x78? (past end of screen)
+              jp    nc,0x3A5F      ; Yes, print done
+              cp    0x77           ; H = 0x77 (last row)?
+              jp    nz,0x39A4      ; No, continue with next row
+              ld    a,l            ; Load L
+              cp    0xE0           ; Is L >= 0xE0 (last column of last row)?
+              jp    c,0x39A4       ; No, continue
+              ld    a,0xFF         ; Set 'last row' marker (0xFF)
+              ld    (0x7AD6),a     ; Save interval counter (last row flag)
+              jp    0x39A4         ; Process next row
+              ld    a,0x0F         ; Graphics output complete - switch printer to text mode
+              call  PRN_CHAR_OUT   ; Send 0x0F (text mode) to printer
+              pop   hl             ; Restore program pointer
+              ei                   ; Enable interrupts
+              ret                  ; Return
+@L39:
+              jp    0x39AF         ; Jump to carry-into-buffer routine
+
+; Set or clear bit 0 of buffer byte depending on carry
+; COPY_CARRY_SET: (defined in symbols.sym)
+              jp    nc,0x3A70      ; If no carry, clear bit 0
+              set   0,(hl)         ; Set bit 0 of (HL)
+              ret                  ; Return
+              res   0,(hl)         ; Clear bit 0 of (HL)
+              ret                  ; Return
+
+; Output graphics print buffer to printer (2 bytes)
+; PRN_OUTPUT_BUF: (defined in symbols.sym)
+              call  PRN_OUTPUT_BUF_BYTE ; Output buffer bytes +0 and +1
+              inc   ix             ; Advance IX by 2
+              inc   ix             ; Advance IX by 2
+              call  PRN_OUTPUT_BUF_BYTE ; Output buffer bytes +0 and +1
+              dec   ix             ; Retreat IX by 2
+              dec   ix             ; Retreat IX by 2
+              call  PRN_OUTPUT_BUF_BYTE ; Output buffer bytes +0 and +1
+              ret                  ; Return
+
+; Output one pair of graphics buffer bytes to printer
+; PRN_OUTPUT_BUF_BYTE: (defined in symbols.sym)
+              ld    a,(ix+0x01)    ; Load carry from buffer byte +1
+              rrc   a              ; Rotate right into carry
+              ld    a,(ix+0x00)    ; Load buffer byte +0
+              push  af             ; Save on stack
+              ld    a,(0x7AD6)     ; Load interval counter
+              cp    0x02           ; Is this row 3?
+              jr    z,@L44         ; Yes!
+              cp    0x01           ; Is this row 2?
+              jr    z,@L45         ; Yes!
+              pop   af             ; Row 1: load byte from stack
+              rla                  ; Shift carry into high bit (RLA)
+@L48:
+              push  af             ; Save on stack
+              ld    a,(0x7AD6)     ; Load interval counter
+              cp    0xFF           ; Last row flag (0xFF)?
+              jr    nz,@L46        ; No
+              pop   af             ; Yes: load from stack
+              and   0x07           ; Keep only lower 3 bits
+              jr    @L47           ; Skip
+@L46:
+              pop   af             ; Not last row: load from stack
+@L47:
+              or    0x80           ; Set bit 7
+              call  PRN_CHAR_OUT   ; Output byte to printer
+              ret                  ; Return
+@L45:
+              pop   af             ; Row 1 exit: load from stack
+              jr    @L48           ; Jump back to row 1 processing
+@L44:
+              pop   af             ; Row 3: load from stack
+              rra                  ; Shift carry into low bit (RRA)
+              jr    @L48           ; Jump back
+
+; Output character to printer - checks for block/inverted graphics
+              or    a              ; Is bit 7 set? (block graphics or inverted)
+              jp    m,0x3AD8       ; Yes, jump to graphics handler
+
+; Output one character byte to printer
+; PRN_CHAR_OUT: (defined in symbols.sym)
+              push  af             ; Save character on stack
+@L49:
+              call  CHECK_BREAK    ; Check BREAK key
+              jp    nc,0x3AC4      ; If BREAK pressed, return
+              pop   af             ; Restore character from stack
+              scf                  ; Set Carry flag (BREAK)
+              ret                  ; Return with BREAK error
+              in    a,(0x00)       ; Read printer port (port 0)
+              bit   0,a            ; BUSY signal?
+              jr    nz,@L49        ; Yes, wait
+              pop   af             ; Restore character
+              out   (0x0E),a       ; Output byte to printer port 0x0E
+              out   (0x0D),a       ; Send strobe to printer port 0x0D
+              cp    0x0D           ; Carriage return (0x0D)?
+              scf                  ; Set Carry
+              ccf                  ; Complement Carry (clear it)
+              ret   nz             ; Return if not CR
+              ld    a,0x0A         ; Send line feed (0x0A)
+              jr    PRN_CHAR_OUT   ; Output LF to printer
+
+; Output character - handle block graphics or inverted
+              bit   6,a            ; Is bit 6 set? (inverted character)
+              jp    z,PRN_GFX_CHAR ; No, it is block graphics - output via PRN_GFX_CHAR
+              and   0x3F           ; Clear bits 6 and 7
+              jp    PRN_INV_CHAR   ; Output inverted character
+
+; Output carriage return to printer
+; PRN_CR_LF: (defined in symbols.sym)
+              ld    a,0x0D         ; Load CR code (0x0D)
+              call  PRN_CHAR_OUT   ; Send CR to printer
+              ret                  ; Return
+
+; Check if BREAK key is pressed. Output: Carry=1 if BREAK pressed.
+; CHECK_BREAK: (defined in symbols.sym)
+              or    a              ; Clear Carry flag
+              ld    a,(0x68FD)     ; Load keyboard row 2 (port 0x68FD)
+              bit   2,a            ; Is CTRL key pressed?
+              ret   nz             ; No, return (not pressed)
+              ld    a,(0x68DF)     ; Load keyboard row 6 (port 0x68DF)
+              scf                  ; Set Carry flag
+              bit   2,a            ; Test bit 2 (BREAK key)
+              ret   z              ; BREAK pressed? Return with Carry set
+              ccf                  ; Not BREAK, clear Carry
+              ret                  ; Return
+
+; Check BREAK key; if pressed, stop execution and return to BASIC
+; CHECK_BREAK_STOP: (defined in symbols.sym)
+              call  CHECK_BREAK    ; Check BREAK key
+              ret   nc             ; Not pressed, return
+              pop   hl             ; Pop return address (discard)
+              pop   hl             ; Pop caller's return address (discard)
+              ld    a,(FLAG2)      ; Load Flag 2
+              and   0xB7           ; Clear CRUN and VERIFY flags (AND with 0xB7)
+              ld    (FLAG2),a      ; Save updated Flag 2
+              ld    a,0x01         ; A = 1 (flag for BREAK)
+              ei                   ; Enable interrupts
+              jp    0x1DA0         ; Jump to BASIC error handler
+
+; Wait until screen output buffer is fully flushed
+; WAIT_OUTPUT_EMPTY: (defined in symbols.sym)
+              ld    a,(0x789C)     ; Load device type
+              or    a              ; Is it 0 (screen)?
+              jp    nz,PRINT_NEXT  ; No, return immediately
+@L50:
+              ld    a,(0x7AAF)     ; Load output buffer counter
+              or    a              ; Buffer empty (= 0)?
+              jr    nz,@L50        ; No, keep waiting
+              jp    PRINT_NEXT     ; Return to PRINT_NEXT
+
+; If output buffer is empty, load cursor column position
+; GET_TTYPOS: (defined in symbols.sym)
+              ld    a,(0x7AAF)     ; Load output buffer counter
+              or    a              ; Buffer empty?
+              ret   nz             ; No, return
+              ld    a,(TTYPOS)     ; Load cursor column position (TTYPOS)
+              ret                  ; Return
+
+; Output interruption during LIST output
+; LIST_PAUSE_CHECK: (defined in symbols.sym)
+              ld    hl,0x68EF      ; Address keyboard row 4
+              bit   4,(hl)         ; SPACE key pressed?
+              jr    nz,@L51        ; No!
+              call  DEBOUNCE_DELAY ; Debounce key
+@L52:
+              bit   4,(hl)         ; Wait until key is released
+              jr    z,@L52
+              call  DEBOUNCE_DELAY ; Debounce key
+@L53:
+              call  CHECK_BREAK_STOP ; BREAK key pressed?
+              bit   4,(hl)         ; No, SPACE key pressed again?
+              jr    nz,@L53        ; No, keep waiting
+              call  DEBOUNCE_DELAY ; Debounce key
+@L54:
+              bit   4,(hl)         ; Wait until key is released
+              jr    z,@L54
+@L51:
+              ld    hl,0xFFFF      ; Current line number = direct command
+              ret                  ; Done!
+
+; Debounce key
+; DEBOUNCE_DELAY: (defined in symbols.sym)
+              ld    hl,0x07FF      ; Counter for wait loop
+@L55:
+              dec   hl             ; Counter - 1
+              ld    a,l
+              or    h
+              jr    nz,@L55        ; No, keep counting
+              ld    hl,0x68EF      ; Address keyboard row 4
+              ret                  ; Done!
+
+; When PRINT# outputs data to cassette
+; TAPE_CMD_WRITE: (defined in symbols.sym)
+              call  TAPE_WRITE_BYTE ; Write byte to cassette
+              ret   
+
+; When PRINT# writes header to cassette
+; TAPE_CMD_WRITE_HEADER: (defined in symbols.sym)
+              di                   ; Disable interrupts
+              inc   hl             ; Program pointer + 1
+              ld    c,0xF2         ; Load identifier for data
+              call  TAPE_WRITE_LEADER_NAME ; Output sync bytes, leader, identifier, and filename to cassette
+              jp    c,0x3AFE       ; BREAK! End
+              dec   hl             ; Program pointer - 1
+              rst   8              ; Is filename terminated with quote-character?
+              DEFB  0x22           ; Comparison literal: quote-character
+              rst   8              ; Is that followed by a comma?
+              DEFB  0x2C           ; Comparison literal: comma
+              ret   
+
+; When INPUT# reads header and filename from cassette
+; TAPE_CMD_SEARCH: (defined in symbols.sym)
+              di                   ; Disable interrupts
+              inc   hl             ; Program pointer + 1
+              call  TAPE_BUFFER_NAME ; Read in the filename
+              dec   hl             ; Program pointer - 1
+              rst   8              ; Is name terminated with quote-character?
+              DEFB  0x22           ; Comparison literal: quote-character
+              rst   8              ; Is that followed by a comma?
+              DEFB  0x2C           ; Comparison literal: comma
+              push  hl             ; Yes, push program pointer onto stack
+              call  TAPE_PREPARE_MESSAGES ; Prepare message output
+              ld    hl,0x3842      ; Address the 'WAITING' text
+              call  TAPE_PRINT_MSG ; and output it
+@L56:
+              call  0x35E7         ; Search for file on cassette
+              ld    a,(SOUND_NOTE_VALUE) ; Load file identifier
+              cp    0xF2           ; Correct for data?
+              jr    nz,@L56        ; No, keep searching
+              pop   hl             ; Yes, restore program pointer
+              ret                  ; Done!
+
+; When INPUT# reads data from cassette
+; TAPE_READ_1_BYTE: (defined in symbols.sym)
+              call  TAPE_READ_BYTE ; Read byte from cassette
+              cp    0x0D           ; End of record?
+              ret   nz             ; No, return
+              push  af             ; Save character on stack
+              call  PRINT_BOL_CHECK ; Output CR/LF
+              pop   af             ; Reload character
+              ret                  ; Done!
+
+; Pixel table for inverse character output on the printer
+; (5 bytes per character)
+; PRN_GFX_FONT: (defined in symbols.sym)
+              DEFB  0xC1,0xBE,0xA2,0xAE,0xB1 ; Char 0x00: '@'
+              DEFB  0x83,0xED,0xEE,0xED,0x83 ; Char 0x01: 'A'
+              DEFB  0x80,0xB6,0xB6,0xB6,0xC1 ; Char 0x02: 'B'
+              DEFB  0xC1,0xBE,0xBE,0xBE,0xDD ; Char 0x03: 'C'
+              DEFB  0x80,0xBE,0xBE,0xBE,0xC1 ; Char 0x04: 'D'
+              DEFB  0x80,0xB6,0xB6,0xB6,0xBE ; Char 0x05: 'E'
+              DEFB  0x80,0xF6,0xF6,0xF6,0xFE ; Char 0x06: 'F'
+              DEFB  0xC1,0xBE,0xBE,0xAE,0x8C ; Char 0x07: 'G'
+              DEFB  0x80,0xF7,0xF7,0xF7,0x80 ; Char 0x08: 'H'
+              DEFB  0xFF,0xBE,0x80,0xBE,0xFF ; Char 0x09: 'I'
+              DEFB  0xDF,0xBF,0xBF,0xC0,0xFE ; Char 0x0A: 'J'
+              DEFB  0x80,0xF7,0xEB,0xDD,0xBE ; Char 0x0B: 'K'
+              DEFB  0x80,0xBF,0xBF,0xBF,0xBF ; Char 0x0C: 'L'
+              DEFB  0x80,0xFD,0xF3,0xFD,0x80 ; Char 0x0D: 'M'
+              DEFB  0x80,0xFD,0xFB,0xF7,0x80 ; Char 0x0E: 'N'
+              DEFB  0xC1,0xBE,0xBE,0xBE,0xC1 ; Char 0x0F: 'O'
+              DEFB  0x80,0xF6,0xF6,0xF6,0xF9 ; Char 0x10: 'P'
+              DEFB  0xC1,0xBE,0xAE,0xDE,0xA1 ; Char 0x11: 'Q'
+              DEFB  0x80,0xF6,0xE6,0xD6,0xB9 ; Char 0x12: 'R'
+              DEFB  0xD9,0xB6,0xB6,0xB6,0xCD ; Char 0x13: 'S'
+              DEFB  0xFE,0xFE,0x80,0xFE,0xFE ; Char 0x14: 'T'
+              DEFB  0xC0,0xBF,0xBF,0xBF,0xC0 ; Char 0x15: 'U'
+              DEFB  0xF8,0xE7,0x9F,0xE7,0xF8 ; Char 0x16: 'V'
+              DEFB  0x80,0xDF,0xE7,0xDF,0x80 ; Char 0x17: 'W'
+              DEFB  0x9C,0xED,0xF7,0xEB,0x9C ; Char 0x18: 'X'
+              DEFB  0xFC,0xFB,0x87,0xFB,0xFC ; Char 0x19: 'Y'
+              DEFB  0x9E,0xAE,0xB6,0xBA,0xBC ; Char 0x1A: 'Z'
+              DEFB  0xFF,0x80,0xBE,0xBE,0xFF ; Char 0x1B: '['
+              DEFB  0xFD,0xFB,0xF7,0xEF,0xDF ; Char 0x1C: down arrow
+              DEFB  0xFF,0xBE,0xBE,0x80,0xFF ; Char 0x1D: ']'
+              DEFB  0xFB,0xFD,0x80,0xFD,0xFB ; Char 0x1E: up arrow
+              DEFB  0xF7,0xE3,0xD6,0xF7,0xF7 ; Char 0x1F: left arrow
+              DEFB  0xFF,0xFF,0xFF,0xFF,0xFF ; Char 0x20: space
+              DEFB  0xFF,0xFF,0xA0,0xFF,0xFF ; Char 0x21: '!'
+              DEFB  0xFF,0xF8,0xFF,0xF8,0xFF ; Char 0x22: double quote
+              DEFB  0xEB,0x80,0xEB,0x80,0xED ; Char 0x23: '#'
+              DEFB  0xDB,0xD6,0x80,0xD6,0xED ; Char 0x24: '$'
+              DEFB  0xD9,0xE9,0xF7,0xCB,0xCD ; Char 0x25: '%'
+              DEFB  0xC9,0xD6,0xA9,0xDF,0xAF ; Char 0x26: '&'
+              DEFB  0xF7,0xF8,0xFC,0xFF,0xFF ; Char 0x27: '''
+              DEFB  0xFF,0xE3,0xDD,0xBE,0xFF ; Char 0x28: '('
+              DEFB  0xFF,0xBE,0xDD,0xE3,0xFF ; Char 0x29: ')'
+              DEFB  0xD6,0xE3,0x80,0xE3,0xD5 ; Char 0x2A: '*'
+              DEFB  0xF7,0xF7,0xC1,0xF7,0xF7 ; Char 0x2B: '+'
+              DEFB  0xDF,0xC7,0xF7,0xFF,0xFF ; Char 0x2C: ','
+              DEFB  0xF7,0xF7,0xF7,0xF7,0xF7 ; Char 0x2D: '-'
+              DEFB  0xFF,0x9F,0x9F,0xFF,0xFF ; Char 0x2E: '.'
+              DEFB  0xDF,0xEF,0xF7,0xFB,0xFD ; Char 0x2F: '/'
+              DEFB  0xC1,0xAE,0xB6,0xBA,0xC1 ; Char 0x30: '0'
+              DEFB  0xFF,0xBD,0x80,0xBF,0xFF ; Char 0x31: '1'
+              DEFB  0x9D,0xAE,0xB6,0xBA,0xBD ; Char 0x32: '2'
+              DEFB  0xDD,0xBB,0xBB,0xBB,0xC9 ; Char 0x33: '3'
+              DEFB  0xE7,0xEB,0xED,0x80,0xEF ; Char 0x34: '4'
+              DEFB  0xD8,0xBA,0xDA,0xDA,0xC6 ; Char 0x35: '5'
+              DEFB  0xC1,0xB6,0xB6,0xB6,0xCF ; Char 0x36: '6'
+              DEFB  0xFC,0xFE,0x86,0xFA,0xFC ; Char 0x37: '7'
+              DEFB  0xC9,0xB6,0xB6,0xB6,0xC9 ; Char 0x38: '8'
+              DEFB  0xF9,0xB6,0xB6,0xB6,0xC1 ; Char 0x39: '9'
+              DEFB  0xFF,0xC9,0xC9,0xFF,0xFF ; Char 0x3A: ':'
+              DEFB  0xBF,0xC4,0xE4,0xFF,0xFF ; Char 0x3B: ';'
+              DEFB  0xF7,0xEB,0xDD,0xDE,0xDE ; Char 0x3C: '<'
+              DEFB  0xEB,0xEB,0xEB,0xEB,0xEB ; Char 0x3D: '='
+              DEFB  0xDE,0xDE,0xDD,0xEB,0xF7 ; Char 0x3E: '>'
+              DEFB  0xFD,0xFE,0xA6,0xFA,0xFD ; Char 0x3F: '?'
+
+; Output error message
+; ERROR_MSG_OUTPUT: (defined in symbols.sym)
+              srl   e              ; Error number / 2
+              inc   e              ; + 1
+@L57:
+              ld    a,(hl)         ; Load byte from error table
+              inc   hl             ; Table address + 1
+              or    a              ; New message?
+              jp    p,0x3CD7       ; No!
+              dec   e              ; Error number - 1 = 0?
+              jr    nz,@L57        ; No, not the right message
+              and   0x7F           ; Clear bit 7
+              call  CHAR_OUTPUT_DISPATCH ; Output byte
+              ld    a,(hl)         ; Load next byte from error table
+              inc   hl             ; Table address + 1
+              or    a              ; New message?
+              jp    p,0x3CE2       ; No, output byte
+              ret                  ; Yes, done
+
+; Table of error messages
+; ERROR_MSG_TABLE: (defined in symbols.sym)
+              DEFB  0xCE           ; 'N'+0x80 = NEXT WITHOUT FOR
+              DEFM  "EXT WITHOUT FOR"
+              DEFB  0xD3           ; 'S'+0x80 = SYNTAX
+              DEFM  "YNTAX"
+              DEFB  0xD2           ; 'R'+0x80 = RET'N WITHOUT GOSUB
+              DEFM  "ET'N WITHOUT GOSUB"
+              DEFB  0xCF           ; 'O'+0x80 = OUT OF DATA
+              DEFM  "UT OF DATA"
+              DEFB  0xC6           ; 'F'+0x80 = FUNCTION CODE
+              DEFM  "UNCTION CODE"
+              DEFB  0xCF           ; 'O'+0x80 = OVERFLOW
+              DEFM  "VERFLOW"
+              DEFB  0xCF           ; 'O'+0x80 = OUT OF MEMORY
+              DEFM  "UT OF MEMORY"
+              DEFB  0xD5           ; 'U'+0x80 = UNDEF'D STATEMENT
+              DEFM  "NDEF'D STATEMENT"
+              DEFB  0xC2           ; 'B'+0x80 = BAD SUBSCRIPT
+              DEFM  "AD SUBSCRIPT"
+              DEFB  0xD2           ; 'R'+0x80 = REDIM'D ARRAY
+              DEFM  "EDIM'D ARRAY"
+              DEFB  0xC4           ; 'D'+0x80 = DIVISION BY ZERO
+              DEFM  "IVISION BY ZERO"
+              DEFB  0xC9           ; 'I'+0x80 = ILLEGAL DIRECT
+              DEFM  "LLEGAL DIRECT"
+              DEFB  0xD4           ; 'T'+0x80 = TYPE MISMATCH
+              DEFM  "YPE MISMATCH"
+              DEFB  0xCF           ; 'O'+0x80 = OUT OF SPACE
+              DEFM  "UT OF SPACE"
+              DEFB  0xD3           ; 'S'+0x80 = STRING TOO LONG
+              DEFM  "TRING TOO LONG"
+              DEFB  0xC6           ; 'F'+0x80 = FORMULA TOO COMPLEX
+              DEFM  "ORMULA TOO COMPLEX"
+              DEFB  0xC3           ; 'C'+0x80 = CAN'T CONT
+              DEFM  "AN'T CONT"
+              DEFB  0xCE           ; 'N'+0x80 = NO RESUME
+              DEFM  "O RESUME"
+              DEFB  0xD2           ; 'R'+0x80 = RESUME WITHOUT
+              DEFM  "ESUME WITHOUT"
+              DEFB  0xD5           ; 'U'+0x80 = UNPRINTABLE
+              DEFM  "NPRINTABLE"
+              DEFB  0xCD           ; 'M'+0x80 = MISSING OPERAND
+              DEFM  "ISSING OPERAND"
+              DEFB  0xC2           ; 'B'+0x80 = BAD FILE DATA
+              DEFM  "AD FILE DATA"
+              DEFB  0xC4           ; 'D'+0x80 = DISK COMMAND?SYNTAX ERROR (separate CR-terminated st
+              DEFM  "ISK COMMAND?SYNTAX ERROR"
+              DEFB  0x0D,0x00      ; CR + null terminator
+
+; If the buffer is empty, write a space into the buffer
+; BUF_BLANK_IF_EMPTY: (defined in symbols.sym)
+              ld    a,(hl)         ; Load character from buffer
+              or    a              ; Is it empty?
+              jr    nz,@L58        ; No, not empty!
+              ld    a,0x20         ; Load space character
+              ld    (hl),a         ; ...and store at start of buffer
+              inc   hl             ; End marker goes after the space
+              xor   a              ; (= 0x00)
+              ld    (hl),a
+              dec   hl             ; Buffer pointer back to start
+@L58:
+              dec   hl             ; Buffer pointer to the byte before the buffer
+              pop   af             ; Reload identifier
+              ret                  ; Done!
+
+; Part of initialization
+; INIT_COLOR_YELLOW: (defined in symbols.sym)
+              ld    (0x787D),a     ; Interrupt RAM output = RET
+              ld    a,0x10         ; Color yellow into color identifier
+              ld    (0x7846),a
+              ret   
+
+; Additional routine for reading a line (RDLINE)
+; with green background and black character display:
+; transfer data from screen to I/O buffer
+; RDLINE_READ_GREEN_BG: (defined in symbols.sym)
+              ld    a,(hl)         ; Load character from screen
+              bit   6,a            ; Inverse character?
+              jr    z,@L59         ; Yes!
+              cp    0x80           ; Graphics character?
+              jp    c,0x3E5D       ; No!
+@L59:
+              pop   bc             ; If not INPUT, then graphics and inverse are only allowed in str
+              ld    de,0x3E53      ; Return address onto stack
+              push  de
+              push  bc
+              jp    0x0502         ; Check end-of-text marker (BREAK?)
+              ret   c              ; BREAK! Back to BASIC
+              ld    hl,0x3E1A      ; Address the text 'SYNTAX ERROR'
+              call  OUTSTR         ; and output it
+              jp    RDLINE         ; Back to line input
+              cp    0x62           ; String marker: quote-character?
+              jr    nz,@L60        ; No, continue
+              and   0xBF           ; Clear bit 6
+              ld    (de),a         ; Character into I/O buffer
+              inc   hl             ; Screen address + 1
+              inc   de             ; Buffer address + 1
+              dec   b              ; Character counter - 1
+              jp    z,0x04EE       ; If 0, end transfer
+
+; Entry point from 0x3EAF, for green background
+; RDLINE_READ_ENTRY: (defined in symbols.sym)
+              ld    a,(hl)         ; Load character from screen
+              bit   7,a            ; Graphics character?
+              jr    nz,@L61        ; Yes!
+              bit   6,a            ; Inverted character?
+              jr    nz,@L62        ; No!
+              jr    @L63           ; Yes!
+@L61:
+              and   0x8F           ; Graphics, clear bits 4,5,6
+              or    0x80           ; Set bit 7
+              jr    @L64
+@L63:
+              or    0xC0           ; Set bits 6 and 7
+              jr    @L64
+@L62:
+              cp    0x62           ; Is it a quote-character?
+              jr    nz,@L65        ; No!
+              push  hl             ; Save HL
+              ld    hl,FLAG2       ; Address Flag2
+              bit   4,(hl)         ; INPUT command?
+              pop   hl             ; Reload HL
+              jr    z,@L60         ; No - from here on, graphics and inverse are not allowed
+@L65:
+              bit   5,a            ; Character in real ASCII code?
+              jr    z,@L64         ; Convert, if wrong
+              and   0xBF           ; (clear bit 6 if needed)
+@L64:
+              ld    (de),a         ; Character into I/O buffer
+              inc   hl             ; Screen address + 1
+              inc   de             ; Buffer address + 1
+              djnz  RDLINE_READ_ENTRY ; Counter - 1
+              jp    0x04EE         ; = 0, then done
+@L60:
+              bit   5,a            ; Character in real ASCII code?
+              jr    z,@L66         ; Convert, if wrong
+              and   0xBF           ; (clear bit 6 if needed)
+@L66:
+              ld    (de),a         ; Character into I/O buffer
+              inc   hl             ; Screen address + 1
+              inc   de             ; Buffer address + 1
+              djnz  RDLINE_READ_GREEN_BG ; Counter - 1
+              jp    0x04EE         ; = 0, transfer complete
+              ld    a,(0x7818)     ; Depending on background, branch to appropriate routine
+              or    a
+              jp    nz,0x04B8      ; Black background
+              jp    RDLINE_READ_ENTRY ; Green background
+
+; Invert character
+; CHAR_INVERT: (defined in symbols.sym)
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black background?
+              jr    nz,@L67        ; Yes!
+              res   6,(hl)         ; Green, clear bit 6
+              ret   
+@L67:
+              set   6,(hl)         ; Black, set bit 6
+              ret   
+
+; Provide clear-character for the screen-clear routine
+; CLEAR_CHAR_GET: (defined in symbols.sym)
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black background?
+              ld    a,0x20         ; Load space character
+              jr    nz,@L68        ; Black, that's fine as is!
+              or    0x40           ; Green, additionally set bit 6
+@L68:
+              ld    (hl),a         ; Space into screen
+              ret   
+
+; When outputting to screen, perform inversion
+; depending on the background
+; CHAR_OUT_INVERT_ADJUST: (defined in symbols.sym)
+              push  af             ; Save character to be output
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black background?
+              jr    z,@L69         ; No - green!
+              pop   af             ; Reload character
+              and   0x3F           ; Clear bits 6 and 7
+              push  hl             ; Main routine inverts, if required.
+              jp    0x31AB
+@L69:
+              pop   af             ; Reload character
+              or    0x40           ; Set bit 6
+              push  hl             ; Save HL
+              ld    hl,0x7838      ; Address Flag 1
+              bit   1,(hl)         ; Invert?
+              pop   hl             ; Restore HL
+              jr    z,@L70         ; No!
+              and   0xBF           ; Clear bit 6
+@L70:
+              jp    0x31B5         ; Done
+
+; Test character for space (blank)
+; CHAR_IS_BLANK_TEST: (defined in symbols.sym)
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black background?
+              ld    a,(hl)         ; Load character
+              jr    nz,@L71        ; Yes, black!
+              cp    0x60           ; Check with bit 6 = 1
+              ret   
+@L71:
+              cp    0x20           ; Check with bit 6 = 0
+              ret   
+
+; Insert space during INSERT and RUBOUT
+; INSERT_BLANK_CHAR: (defined in symbols.sym)
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black?
+              ld    a,0x20         ; Load space character
+              jr    nz,@L72        ; Yes!
+              or    0x40           ; For green, set bit 6
+@L72:
+              ld    (de),a         ; ...into screen memory
+              ret   
+
+; Prepare line-clear for the roll (scroll) routines
+; CLRLINE_CHAR_GET: (defined in symbols.sym)
+              ld    b,0x20         ; Load length of a line
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black?
+              ld    a,0x20         ; Load space character
+              ret   nz             ; Yes, done!
+              or    0x40           ; For green, set bit 6
+              ret   
+
+; Helper routine for cassette loading, for correctly
+; displaying messages depending on the background.
+; Called from 0x3889 (general messages in the last line)
+; TAPE_MSG_PRINT_BG: (defined in symbols.sym)
+              ld    de,0x71E0      ; Address last line
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black?
+              ret   nz             ; Yes, no action
+              pop   af             ; Clean up stack
+@L73:
+              ld    a,(hl)         ; Load text character
+              or    a              ; End of text?
+              ret   z              ; Yes, done!
+              res   6,a            ; Clear bit 6
+              ld    (de),a         ; Output character inverted
+              inc   de             ; Screen address + 1
+              inc   hl             ; Text address + 1
+              jr    @L73           ; Next byte
+
+; Called from 0x382B (output of the file identifier)
+; TAPE_ID_PRINT_BG: (defined in symbols.sym)
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black?
+              ld    a,(hl)         ; Load identifier
+              jr    nz,@L74        ; Yes!
+              set   6,a            ; Green, set bit 6
+              ld    (de),a         ; Transfer into screen
+              inc   de             ; Screen address + 1
+              ld    a,0x7A         ; Load separator for green
+              ret   
+@L74:
+              ld    (de),a         ; Identifier onto screen (black)
+              ld    a,0x3A         ; Load separator
+              ret   
+
+; Called from 0x3837 (output of file/program name)
+; TAPE_NAME_PRINT_BG: (defined in symbols.sym)
+              push  af             ; Save character
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black?
+              jr    nz,@L75        ; Yes!
+              pop   af             ; Green! Reload character
+              or    0x40           ; Set bit 6
+              ld    (de),a         ; Output character to screen
+              ret   
+@L75:
+              pop   af             ; Black! Reload character
+              and   0x3F           ; Clear bits 6 and 7
+              ld    (de),a         ; Output character to screen
+              ret   
+
+; Helper routine for the COPY statement
+; Called from 0x392D
+; COPY_CHAR_BG: (defined in symbols.sym)
+              push  af             ; Save character
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black?
+              jr    nz,@L76        ; Yes!
+              pop   af             ; Green! Reload character
+              bit   6,a            ; Inverted character?
+              jp    nz,0x3938      ; No, normal output
+              jp    0x3931         ; Yes, inverted output
+@L76:
+              pop   af             ; Black! Reload character
+              bit   6,a            ; Inverted character?
+              jp    z,0x3938       ; No, normal output
+              jp    0x3931         ; Yes, inverted output
+              jp    0x3931         ; Not used!
+
+; Helper routine for character output on screen
+; Adjusting inversion to match the background color
+; Called from 0x3149
+; CHAR_OUT_BG_ADJUST: (defined in symbols.sym)
+              push  af             ; Save character
+              ld    a,(0x7818)     ; Load background flag
+              or    a              ; Black?
+              jr    nz,@L77        ; Yes!
+              pop   af             ; Green! Reload character
+              and   0x3F           ; Clear bits 6 and 7
+              jp    0x3154
+@L77:
+              pop   af             ; Black! Reload character
+              and   0x7F           ; Clear bit 7
+              jp    0x3154
+
+; Helper routine for reading from cassette
+; Called from 0x369C
+; TAPE_READ_BYTE_CHECKED: (defined in symbols.sym)
+              call  TAPE_READ_BYTE ; Read byte from cassette
+              ret   nc             ; OK!
+              pop   hl             ; Return address from stack
+              jp    TAPE_LOAD_ERROR ; Read error!
+
+; When a new background color is chosen, convert screen contents
+; Called from the interrupt service routine
+;
+; block]
+; BG_COLOR_CHANGE_CONVERT: (defined in symbols.sym)
+              ld    a,(0x7819)     ; Current background flag
+              ld    b,a
+              ld    a,(0x7818)     ; = chosen background?
+              cp    b
+              jp    z,OUT_BUF_FLUSH ; Yes, go to character output
+              ld    (0x7819),a     ; Update current background flag
+              ld    hl,0x7000      ; Load screen start address
+              ld    bc,0x0200      ; Screen size
+@L78:
+              ld    a,(hl)         ; Load character
+              or    a              ; Block graphics?
+              jp    m,0x3F97       ; Yes, leave unchanged
+              xor   0x40           ; Toggle bit 6 (inversion)
+              ld    (hl),a         ; ...and write back
+              inc   hl             ; Screen address + 1
+              dec   bc             ; Character counter - 1
+              ld    a,b
+              or    c
+              jr    nz,@L78        ; No, next character
+              jp    OUT_BUF_FLUSH  ; Yes, done!
+
+; Check whether the CTRL key is pressed during initialization
+; CTRL_KEY_CHECK_INIT: (defined in symbols.sym)
+              ld    a,(0x68FD)     ; Load keyboard row 2
+              bit   2,a            ; CTRL key pressed?
+              ld    a,0x20         ; Space into A
+              jr    nz,@L79        ; Not pressed!
+              or    0x40           ; Set bit 6 (black background)
+              ld    (0x7818),a     ; Set background flags for black
+              ld    (0x7819),a
+@L79:
+              ld    (0x783C),a     ; Space as cursor backup
+              jp    CLRSCR         ; Continue initialization
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 ; Unused/unprogrammed ROM space (0x00 filler) - not real code, en
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+              DEFB  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+              DEFB  0x00
+              DEFB  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF ; Unprogrammed EPROM fill (0xFF) - standard end-of-ROM padding
+              DEFB  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF

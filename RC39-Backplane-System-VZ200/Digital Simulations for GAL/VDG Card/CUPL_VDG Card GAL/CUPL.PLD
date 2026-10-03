@@ -1,0 +1,43 @@
+Name     VDG Card GAL.dig ;
+PartNo   00 ;
+Date     10.06.2026 ;
+Revision 01 ;
+Designer david ;
+Company  unknown ;
+Assembly None ;
+Location unknown ;
+Device   g22v10 ;
+
+ar = 'b'0 ;
+sp = 'b'0 ;
+
+/* inputs */
+PIN 4 = A10;
+PIN 5 = A11;
+PIN 6 = A12;
+PIN 7 = A13;
+PIN 8 = A14;
+PIN 9 = A15;
+PIN 2 = A8;
+PIN 3 = A9;
+PIN 10 = E;
+
+/* outputs */
+PIN 21 = SER1;
+PIN 20 = SER2;
+PIN 19 = FDC;
+PIN 18 = TC;
+PIN 17 = 32KRAM;
+PIN 16 = 8KLOW;
+PIN 15 = 8KHIGH;
+PIN 14 = ROM;
+
+/* combinatorial logic */
+32KRAM = (!A13 & !A14 & !A15) # (A13 & A15) # (A14 & A15) # !E;
+8KHIGH = A13 # !A14 # !A15 # !E;
+8KLOW = !A13 # A14 # !A15 # !E;
+FDC = !A10 # A11 # A12 # A13 # A14 # A15 # A8 # A9 # !E;
+ROM = !A13 # !A14 # !A15 # !E;
+SER1 = A10 # A11 # A12 # A13 # A14 # A15 # A8 # A9 # !E;
+SER2 = A10 # A11 # A12 # A13 # A14 # A15 # !A8 # A9 # !E;
+TC = !A10 # A11 # A12 # A13 # A14 # A15 # !A8 # A9 # !E;
