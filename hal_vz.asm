@@ -11,6 +11,8 @@
 ; Everything else of the game is already at its ORIGINAL TRS-80 address
 ; (see port_13ghosts_v8.py); this routine only prepares the VZ200/RC39.
 ; ---------------------------------------------------------------------------
+BLIT_PAGE EQU 0eeh		; 6 pages EE00-F3FF: blit lookup tables (runtime)
+
 vz_boot:
 	di
 	ld	a, 008h
@@ -27,6 +29,7 @@ vz_boot:
 
 	ld	sp, 0ffffh		; same stack the original sets
 	call	vz_build_font_cache
+	call	vz_build_blit_tables
 	jp	GAME_ENTRY
 
 ; ---------------------------------------------------------------------------
@@ -281,199 +284,721 @@ vz_k_done:
 	or	a		; Set flags according to A
 	ret
 
+; ==== BEGIN GENERATED BLIT (gen_blit.py) ====
 ; ---------------------------------------------------------------------------
-; vz_blit_frame:
-; Fast converter from 1024-byte TRS-80 64x16 screen buffer (at HL)
-; to VZ200 MC6847 Mode 1 128x64 display at 0x7000-0x77FF.
+; vz_blit_frame:  1024-byte TRS-80 64x16 screen buffer (HL) -> VZ200 MC6847
+; mode 1 (128x64) at 0x7100-0x76FF.  Preserves AF BC DE HL IX.
 ;
-; Screen layout:
-;   - Scanlines 0-7   (0x7000-0x70FF): Top margin
-;   - Scanlines 8-55  (0x7100-0x76FF): 16 character rows * 3 scanlines/row
-;     = 48 scanlines of 128-pixel playfield!
-;   - Scanlines 56-63 (0x7700-0x77FF): Bottom margin
+; Each TRS-80 graphics char (bit 7 set) holds a 2x3 block; chars with bit 7
+; clear draw blank (same as the first version).  One VRAM byte = 2 chars x
+; 2 pixels x 2 bits, so each scanline byte is  HI[chA] | LO[chB]  where HI/LO
+; are 256-byte page-aligned tables built at boot by vz_build_blit_tables:
+;     page BLIT_PAGE+r    : HI form for scanline r (left char:  bits 7-4)
+;     page BLIT_PAGE+3+r  : LO form for scanline r (right char: bits 3-0)
+; H/D hold the table pages, L/E the chars.  The 32 pairs of a row are fully
+; unrolled (dest = IX+n) and the scanline order zigzags 0-1-2 / 2-1-0 so
+; the table pages never need resetting.  ~150 T-states per pair-of-3-scanlines
+; versus ~620 average before.
 ; ---------------------------------------------------------------------------
 vz_blit_frame:
 	push	af
 	push	bc
 	push	de
 	push	hl
-
-	; DE points to VRAM start of active playfield (Scanline 8 = 0x7100)
-	ld	de, 07100h
-	ld	b, 010h		; 16 character rows
-
-vz_row_loop:
-	push	bc		; Save row counter
-	push	hl		; Save start of this character row in buffer
-
-	; Each character row has 3 scanlines on VZ200:
-	; Scanline 0: uses bits 0, 1 of each character
-	; Scanline 1: uses bits 2, 3 of each character
-	; Scanline 2: uses bits 4, 5 of each character
-
-	; --- Scanline 0 ---
-	ld	c, 020h		; 32 pairs of characters (64 chars total)
-vz_sc0_loop:
-	ld	a, (hl)		; Char 0
-	inc	hl
-	ld	b, (hl)		; Char 1
-	inc	hl
-	call	vz_conv_pair_row0
-	ld	(de), a
-	inc	de
-	dec	c
-	jr	nz, vz_sc0_loop
-
-	; --- Scanline 1 ---
-	pop	hl		; Restore start of character row
-	push	hl
-	ld	c, 020h
-vz_sc1_loop:
-	ld	a, (hl)
-	inc	hl
-	ld	b, (hl)
-	inc	hl
-	call	vz_conv_pair_row1
-	ld	(de), a
-	inc	de
-	dec	c
-	jr	nz, vz_sc1_loop
-
-	; --- Scanline 2 ---
-	pop	hl		; Restore start of character row
-	ld	c, 020h
-vz_sc2_loop:
-	ld	a, (hl)
-	inc	hl
-	ld	b, (hl)
-	inc	hl
-	call	vz_conv_pair_row2
-	ld	(de), a
-	inc	de
-	dec	c
-	jr	nz, vz_sc2_loop
-
-	pop	bc		; Restore row counter
-	djnz	vz_row_loop
-
+	push	ix
+	ld	b, h
+	ld	c, l			; BC = source
+	ld	ix, 07100h		; first playfield scanline
+	ld	h, BLIT_PAGE
+	ld	d, BLIT_PAGE+3
+	ld	a, 16			; 16 character rows
+	push	af			; row counter lives on the stack
+vz_bl_row:
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+0), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+32), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+64), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+65), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+33), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+1), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+2), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+34), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+66), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+67), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+35), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+3), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+4), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+36), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+68), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+69), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+37), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+5), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+6), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+38), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+70), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+71), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+39), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+7), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+8), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+40), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+72), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+73), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+41), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+9), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+10), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+42), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+74), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+75), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+43), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+11), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+12), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+44), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+76), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+77), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+45), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+13), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+14), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+46), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+78), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+79), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+47), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+15), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+16), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+48), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+80), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+81), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+49), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+17), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+18), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+50), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+82), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+83), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+51), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+19), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+20), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+52), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+84), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+85), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+53), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+21), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+22), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+54), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+86), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+87), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+55), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+23), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+24), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+56), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+88), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+89), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+57), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+25), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+26), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+58), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+90), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+91), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+59), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+27), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+28), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+60), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+92), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+93), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+61), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+29), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+30), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+62), a
+	inc	h
+	inc	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+94), a
+	ld	a, (bc)
+	inc	bc
+	ld	l, a
+	ld	a, (bc)
+	inc	bc
+	ld	e, a
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+95), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+63), a
+	dec	h
+	dec	d
+	ld	a, (de)
+	or	(hl)
+	ld	(ix+31), a
+	push	de
+	ld	de, 96			; next character row = 3 scanlines * 32 bytes
+	add	ix, de
+	pop	de
+	pop	af
+	dec	a
+	push	af
+	jp	nz, vz_bl_row
+	pop	af
+	pop	ix
 	pop	hl
 	pop	de
 	pop	bc
 	pop	af
 	ret
 
-; Convert Char A (in register A) and Char B (in register B) to Mode 1 byte
-; Row 0: Char A bits 0,1 -> pixels 0,1; Char B bits 0,1 -> pixels 2,3
-; 2-bit color 3 (11b = Red or Yellow foreground)
-vz_conv_pair_row0:
-	push	bc
-	ld	c, 000h		; Result
-	or	a
-	jp	p, vz_c0_p2
-	rra			; Bit 0 into Carry
-	jr	nc, vz_c0_b1
-	set	7, c
-	set	6, c
-vz_c0_b1:
-	rra			; Bit 1 into Carry
-	jr	nc, vz_c0_p2
-	set	5, c
-	set	4, c
-vz_c0_p2:
-	ld	a, b		; Now test Char B
-	or	a
-	jp	p, vz_c0_done
-	rra			; Bit 0 into Carry
-	jr	nc, vz_c0_b3
-	set	3, c
-	set	2, c
-vz_c0_b3:
-	rra			; Bit 1 into Carry
-	jr	nc, vz_c0_done
-	set	1, c
-	set	0, c
-vz_c0_done:
+; ---------------------------------------------------------------------------
+; vz_build_blit_tables: fills the six 256-byte pages at BLIT_PAGE (runs once,
+; from vz_boot).  Char c -> s = c if bit 7 set else 0.  For scanline r the
+; two bits (s >> 2r) & 3 give  HI = (b0 ? C0h : 0) | (b1 ? 30h : 0),  LO = HI >> 4.
+; ---------------------------------------------------------------------------
+vz_build_blit_tables:
+	ld	c, 0
+vbt_char:
 	ld	a, c
-	pop	bc
+	bit	7, a
+	jr	nz, vbt_ok
+	xor	a
+vbt_ok:
+	ld	b, a			; B = effective char
+	ld	h, BLIT_PAGE
+	ld	l, c
+	ld	a, b
+	call	vbt_pair		; scanline 0
+	inc	h
+	ld	a, b
+	srl	a
+	srl	a
+	call	vbt_pair		; scanline 1
+	inc	h
+	ld	a, b
+	srl	a
+	srl	a
+	srl	a
+	srl	a
+	call	vbt_pair		; scanline 2
+	inc	c
+	jr	nz, vbt_char
 	ret
 
-; Row 1: Char A bits 2,3 -> pixels 0,1; Char B bits 2,3 -> pixels 2,3
-vz_conv_pair_row1:
-	push	bc
-	ld	c, 000h
-	or	a
-	jp	p, vz_c1_p2
-	rrca			; Shift bits 2,3 into bits 0,1
-	rrca
+; A = (char >> 2r); writes HI form to (HL) and LO form to (HL+0300h). Keeps HL.
+vbt_pair:
+	ld	e, 0
 	rra
-	jr	nc, vz_c1_b1
-	set	7, c
-	set	6, c
-vz_c1_b1:
+	jr	nc, vbp1
+	ld	e, 0c0h
+vbp1:
 	rra
-	jr	nc, vz_c1_p2
-	set	5, c
-	set	4, c
-vz_c1_p2:
-	ld	a, b
-	or	a
-	jp	p, vz_c1_done
+	jr	nc, vbp2
+	set	5, e
+	set	4, e
+vbp2:
+	ld	(hl), e
+	ld	a, e
 	rrca
 	rrca
-	rra
-	jr	nc, vz_c1_b3
-	set	3, c
-	set	2, c
-vz_c1_b3:
-	rra
-	jr	nc, vz_c1_done
-	set	1, c
-	set	0, c
-vz_c1_done:
-	ld	a, c
-	pop	bc
+	rrca
+	rrca
+	push	hl
+	push	de
+	ld	de, 00300h
+	add	hl, de
+	pop	de
+	ld	(hl), a
+	pop	hl
 	ret
-
-; Row 2: Char A bits 4,5 -> pixels 0,1; Char B bits 4,5 -> pixels 2,3
-vz_conv_pair_row2:
-	push	bc
-	ld	c, 000h
-	or	a
-	jp	p, vz_c2_p2
-	rrca
-	rrca
-	rrca
-	rrca
-	rra
-	jr	nc, vz_c2_b1
-	set	7, c
-	set	6, c
-vz_c2_b1:
-	rra
-	jr	nc, vz_c2_p2
-	set	5, c
-	set	4, c
-vz_c2_p2:
-	ld	a, b
-	or	a
-	jp	p, vz_c2_done
-	rrca
-	rrca
-	rrca
-	rrca
-	rra
-	jr	nc, vz_c2_b3
-	set	3, c
-	set	2, c
-vz_c2_b3:
-	rra
-	jr	nc, vz_c2_done
-	set	1, c
-	set	0, c
-vz_c2_done:
-	ld	a, c
-	pop	bc
-	ret
+; ==== END GENERATED BLIT ====
 
 ; ---------------------------------------------------------------------------
 ; vz_draw_glyph: draws one cached 8x8 font tile to VRAM.

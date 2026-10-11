@@ -33,6 +33,7 @@ Memory map after loading (RC39 with the 10K window set to RAM):
   886C-CA05  ORIGINAL game bytes, patched
   CA12-E411  game buffers, slack, screen table (runtime, original addresses)
   E420-      replacement routines, font, screen list  (tape file 3)
+  EE00-F3FF  blit lookup tables, 6 pages (runtime, built by vz_build_blit_tables)
   F400-F7FF  font tile cache (runtime)
 
 Everything the patcher changes is listed in PATCHES and checked against the
@@ -339,6 +340,10 @@ def main():
     hal_total = len(code) + len(d_blob)
     if HAL_BASE + hal_total >= TILE_CACHE:
         raise SystemExit(f"HAL + screen piece D ({hal_total} bytes) overlaps the tile cache at {TILE_CACHE:04X}")
+    BLIT_TABLES = 0xEE00        # must match BLIT_PAGE in hal_vz.asm: six 256-byte runtime pages up to the tile cache
+    if HAL_BASE + hal_total > BLIT_TABLES:
+        raise SystemExit(f"HAL + screen piece D end at {HAL_BASE + hal_total:04X}, overlapping the blit tables at {BLIT_TABLES:04X}")
+    assert BLIT_TABLES + 6 * 256 <= TILE_CACHE
 
     # patch the original game bytes
     patches = build_patches()
