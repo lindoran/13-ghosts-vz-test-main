@@ -31,11 +31,81 @@ VZ2WAV  = "/home/david/Documents/vz2wav-decompile/bin/ia64-linux/vz2wav"
 # code. 0x7AE8 is the ROM's own documented "start of user RAM" (see the
 # comment at export.lst address 0x00A8) and sits well clear of all of it.
 LOAD_ORG = 0x7AE8
+
+# The VZ200 ROM's PRN_GFX_FONT (0x3B94) has 17 bad bytes across 10 glyphs
+# (confirmed against a real ROM dump -- see VZ200_basic_ROM_listing/
+# README-Font issue.md). The ROM can't be fixed, so the corrected table
+# is embedded in the game image and the tile cache is built from that copy.
+FONT_SRC = os.path.join("VZ200_basic_ROM_listing", "corrected_table.asm")
 # ----------------------------------------------------------------------- --
+
+# ---------------------------------------------------------------------------
+# DATA REGIONS.  z80dasm is a linear sweep: level/sprite tables embedded in
+# the TRS-80 image were disassembled as "instructions", many with a 16-bit
+# operand that happens to look like an in-image address (ld bc,laa06h ...).
+# Treating those as real code makes this script (a) rewrite buffer addresses
+# (0CA12h ...) inside the data and (b) relocate their label operands by the
+# 0x28D3 load shift -- silently corrupting the compressed level stream, which
+# the decompressor at 0xC665..0xC6F8 then expands with garbage run lengths
+# (an LDIR with BC=0xFF00 that overwrites all of RAM).  Found by running the
+# tape in the RC39/VZ200 emulator.  Everything in these ORIGINAL-address
+# ranges is emitted as raw bytes (labels kept, so addresses still resolve):
+#   0x5200-0x5359  header table before the entry point (0x535A)
+#   0x60A9-0xC586  level/sprite data between the first code block (ends with
+#                  "jp lc600h" at 0x60A6) and the code that resumes at 0xC587
+DATA_RANGES = [(0x5200, 0x5359), (0x60A9, 0xC586)]
+
+# Individual instructions whose 16-bit immediate is a CONSTANT that merely
+# looks like an in-image address (z80dasm labelled it, so the port would
+# relocate it).  Found by emulator debugging + an audit of every in-image
+# 16-bit immediate; each is emitted as raw bytes.  Original addresses:
+#   0xC6FB ld de,803Eh / 0xC715 ld de,803Eh  -> bytes "3E 80" = ld a,80h opcode
+#   0xC6FE ld hl,8036h / 0xC71D ld hl,8036h  -> bytes "36 80" = ld (hl),80h opcode
+#       (day/night switch patches the decompressor's `xor n` / `ld (hl),n`
+#        instructions at 0xC6AC/0xC6CF/0xC6F2/0xC787 with these byte pairs;
+#        relocating them rewrote the decompressor into `add hl,bc; xor c`)
+#   0x5A29 ld bc,8000h / 0x5A38 ld bc,8000h  -> delay count for ROM call 0060h
+CONST_LINES = {0xC6FB, 0xC6FE, 0xC715, 0xC71D, 0x5A29, 0x5A38}
+
+def freeze_data_regions(lines):
+    out = []
+    n_frozen = 0
+    pat = re.compile(r";([0-9a-f]{4})\t((?:[0-9a-f]{2} )+)")
+    for line in lines:
+        m = pat.search(line)
+        if m and not line.lstrip().startswith(";"):
+            addr = int(m.group(1), 16)
+            if addr in CONST_LINES or any(lo <= addr <= hi for lo, hi in DATA_RANGES):
+                bs = m.group(2).split()
+                # keep the original ";addr<TAB>bytes" tail verbatim: later
+                # passes key off it (base-label placement, the 0x5200 skip)
+                out.append("\tdefb\t" + ",".join(f"0{b.upper()}h" for b in bs) +
+                           "\t\t" + line[m.start():])
+                n_frozen += 1
+                continue
+        out.append(line)
+    print(f"freeze_data_regions: {n_frozen} instruction lines -> raw defb")
+    return out
+
+def load_corrected_font():
+    """Parse corrected_table.asm -> 64 glyphs x 5 bytes; return DEFB source."""
+    txt = open(FONT_SRC).read()
+    rows = re.findall(r"DEFB\s+((?:0x[0-9A-Fa-f]{2},?){5})", txt)
+    if len(rows) != 64:
+        raise SystemExit(f"{FONT_SRC}: expected 64 glyph rows, found {len(rows)}")
+    out = ["; Corrected PRN_GFX_FONT, 64 glyphs x 5 column bytes (active-low).",
+           "; Generated from " + FONT_SRC.replace("\\", "/") + " -- do not hand-edit.",
+           "vz_font_src:"]
+    for i, r in enumerate(rows):
+        out.append("\tdefb\t" + ",".join(f"0{b[2:].upper()}h" for b in r.split(",")) +
+                   f"\t\t; glyph {i:02X}")
+    out.append("vz_font_src_end:")
+    return "\n".join(out) + "\n"
 
 def main():
     with open(SRC_ASM, "r") as f:
         lines = f.readlines()
+    lines = freeze_data_regions(lines)
 
     out_lines = []
     
@@ -156,13 +226,13 @@ def main():
         "0c906h": "lc906h",
         "0c909h": "lc909h",
 
-        # Buffer remapping into 10K RAM window (0x4000-0x5600)
+        # Buffer remapping into 10K RAM window (0x4000-0x57FF incl. 0x400 slack after buffer 4; table 0x5800)
         "0ca12h": "04000h", # Buffer 0
         "0ce12h": "04400h", # Buffer 1
         "0d212h": "04800h", # Buffer 2
         "0d612h": "04c00h", # Buffer 3
         "0da12h": "05000h", # Buffer 4
-        "0e212h": "05400h", # Pointer table
+        "0e212h": "05800h", # Pointer table -- NOT at 0x5400: the scroll code at 0x6051-0x6076 LDIRs 0x400 bytes to buffer4+k*0x40 (k<=15), overrunning buffer 4 by up to 0x3C0 bytes. The original layout keeps a 0x400 slack gap (0xDE12-0xE211) before the table; so do we (0x5400-0x57FF).
         "0ddd2h": "053c0h", # Buffer 4 + 0x3C0 = row 15, the one-row HUD. (was 053d2h -- 18 bytes off, HUD copy overran into the pointer table)
         "0cc92h": "04280h", # Buffer 0 + 0x280
         "0ccd5h": "042c3h", # Buffer 0 + 0x2C3
@@ -229,7 +299,12 @@ def main():
         if ";5577\t11 00 3c" in line:
             out_lines.append("\tcall\tvz_blit_frame\t; Blit buffer4 (HL) to VZ200 screen\n")
             out_lines.append("\tcall\tvz_draw_hud_row\t; Render the one-row HUD (buffer4 row 15) into the VZ margin\n")
-            out_lines.append("\tnop\n\tnop\n\tnop\n\tnop\n\tnop\n")
+            # The original also did `push bc` (BC=0400h) between the copy set-up and
+            # the LDIR; the matching `pop bc; pop de` at 0x5583 relies on it.  Dropping
+            # the push made `pop bc` take the buffer address as an LDIR count (0x5000)
+            # and ran a block copy over all of RAM -> game restarted at the title.
+            out_lines.append("\tld\tbc, 00400h\t\t; keep the original push bc (balances pop bc/pop de at 0x5583)\n")
+            out_lines.append("\tpush\tbc\n")
             continue
         if ";557a\t01 00 04" in line and idx < 500: continue
         if ";557d\tc5" in line: continue
@@ -338,11 +413,19 @@ vz_boot:
 \tld\t(hl), 000h
 \tldir
 
-\t; 4. Clear the 5 game buffers at 0x4000-0x55FF with 0x80 (TRS-80 blank semigraphics)
+\t; 4. Clear the 5 game buffers + the 0x400 slack after buffer 4 (0x4000-0x57FF)
+\t;    with 0x80 (TRS-80 blank semigraphics), then zero the 512-byte
+\t;    decompressor pointer table at 0x5800-0x59FF (unused entries must be 0:
+\t;    a zero pointer is how the decompressor reports "no such screen").
 \tld\thl, 04000h
 \tld\tde, 04001h
-\tld\tbc, 015ffh
+\tld\tbc, 017ffh
 \tld\t(hl), 080h
+\tldir
+\tld\thl, 05800h
+\tld\tde, 05801h
+\tld\tbc, 001ffh
+\tld\t(hl), 000h
 \tldir
 
 \t; 5. Set stack to top of RAM
@@ -728,7 +811,7 @@ vz_draw_glyph:
 \tadd\thl, hl
 \tadd\thl, hl
 \tadd\thl, hl\t\t; hl = char_code * 16
-\tld\tbc, 05600h\t\t; FONT_TILE_CACHE
+\tld\tbc, 05a00h\t\t; FONT_TILE_CACHE
 \tadd\thl, bc
 \tld\tb, 8
 vdg_row_loop:
@@ -823,7 +906,8 @@ vhr_score_loop:
 ; ---------------------------------------------------------------------------
 ; Text-mode font cache (see texmode-issues.md).
 ;
-; Converts the VZ200 ROM's PRN_GFX_FONT table (0x3B94: 64 glyphs, 5
+; Converts the corrected PRN_GFX_FONT table (embedded at vz_font_src; the
+; ROM copy at 0x3B94 has typos and is no longer read) (64 glyphs, 5
 ; bytes each, column-major, INVERTED polarity -- confirmed against the
 ; ROM's own "inverse character output" comment and the space glyph
 ; being 0xFF x5) into 64 cached 8x8 Mode-1 tiles (16 bytes each, 2
@@ -846,8 +930,8 @@ vhr_score_loop:
 ; was wired into the build.
 ; ---------------------------------------------------------------------------
 vz_build_font_cache:
-\tld\thl, 03b94h\t\t; PRN_GFX_FONT
-\tld\tde, 05600h\t\t; FONT_TILE_CACHE
+\tld\thl, vz_font_src\t; corrected copy embedded below (NOT the ROM's)
+\tld\tde, 05a00h\t\t; FONT_TILE_CACHE
 \tld\tb, 64
 fc_glyph_loop:
 \tpush\tbc
@@ -977,6 +1061,7 @@ fc_dst_row:  defw 0
 ; End of HAL
 """
     out_lines.append(hal_code)
+    out_lines.append(load_corrected_font())
 
     print(f"Writing {OUT_ASM} ({len(out_lines)} lines)...")
     with open(OUT_ASM, "w") as f:

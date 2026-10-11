@@ -1,0 +1,409 @@
+#!/usr/bin/env python3
+"""
+port_13ghosts_v8.py -- 13 Ghosts (TRS-80, Software Affair 1982) -> VZ200 / RC39
+
+DESIGN (replaces the relocating re-assembly of v1..v7)
+------------------------------------------------------
+The v1..v7 scripts disassembled the TRS-80 binary, shifted it to 0x7AE8 and
+re-assembled it with symbolic labels.  A linear disassembly cannot tell code
+from data or addresses from constants, so every such guess corrupted
+something (level data, the day/night patch bytes, the decompressor's own
+code, and -- finally -- the pointer tables in the sprite/animation data,
+which hold absolute TRS-80 addresses).
+
+v8 does not relocate anything.  The game stays at its ORIGINAL addresses,
+0x5200-0xCA05, byte for byte, and only the TRS-80-specific instructions are
+patched in place (about 25 sites: video copy, keyboard, sound, TRSDOS).  The
+only thing that moves is the block of 34 compressed screens, which sits at
+0x644B-0x886B in the original -- exactly on top of the VZ200's I/O and video
+RAM (0x6800-0x77FF).  The screens are position independent (the game
+indexes them through a table it builds at start-up), so the patcher splits
+them into pieces that fit the free RAM and the table is filled by the
+replacement code (hal_vz.asm) instead of by the game's own scan.
+
+Memory map after loading (RC39 with the 10K window set to RAM):
+
+  4000-4007  stub: loads the next tape file          (tape file 1)
+  4050-51FF  compressed screens, piece C
+  5200-644A  ORIGINAL game bytes, patched
+  644B-67FF  compressed screens, piece A
+  6800-77FF  VZ200 I/O + video RAM (not used for code/data)
+  7AE8-7AEF  stub: loads the next tape file          (tape file 2)
+  7AF0-886B  compressed screens, piece B
+  886C-CA05  ORIGINAL game bytes, patched
+  CA12-E411  game buffers, slack, screen table (runtime, original addresses)
+  E420-      replacement routines, font, screen list  (tape file 3)
+  F400-F7FF  font tile cache (runtime)
+
+Everything the patcher changes is listed in PATCHES and checked against the
+expected original bytes, so the result can be diffed against the original.
+"""
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+
+SRC_ASM = "ghost13b.asm"                                   # z80dasm listing of the TRS-80 binary
+FONT_SRC = os.path.join("VZ200_basic_ROM_listing", "corrected_table.asm")
+HAL_SRC = "hal_vz.asm"
+
+ORIG_LO, ORIG_HI = 0x5200, 0xCA05
+CODE_RANGES = [(0x535A, 0x60A8), (0xC587, 0xCA05)]         # real code; the rest is data
+GAME_ENTRY = 0x535A
+
+HAL_BASE = 0xE420
+TILE_CACHE = 0xF400
+SCREEN_TABLE = 0xE212
+SND_ENABLE = 0xC80B
+HUD_SCORE, HUD_LEVEL10, HUD_LEVEL1 = 0xDDDE, 0xDE04, 0xDE05    # buffer 4 row 15 + field offsets
+HUD_GHOST10, HUD_GHOST1 = 0xDE0F, 0xDE10
+
+BUILDER_START = 0x644A          # `ld hl,l644ah` in the original table builder (0xC753)
+
+# Where the compressed screens may go: (name, first address, limit).  Each
+# region ends with a 09h terminator so the decompressor stops there.
+SCREEN_REGIONS = [("C", 0x4050, 0x5200), ("A", 0x644B, 0x6800), ("B", 0x7AF0, 0x886C)]
+
+STUB_CODE = lambda name_ptr: bytes([0x21, name_ptr & 255, name_ptr >> 8, 0xCD, 0x5F, 0x36, 0x76, 0x00])
+
+VZPACK = os.environ.get("VZPACK") or shutil.which("vzpack")
+VZ2WAV = os.environ.get("VZ2WAV") or shutil.which("vz2wav")
+
+
+# ------------------------------------------------------------------ original image
+def recon_original():
+    """Rebuild the original binary from the ';addr<TAB>bytes' comments of the z80dasm listing."""
+    pat = re.compile(r";([0-9a-f]{4})\t((?:[0-9a-f]{2} )+)")
+    mem = {}
+    for line in open(SRC_ASM):
+        m = pat.search(line)
+        if m:
+            a = int(m.group(1), 16)
+            for i, x in enumerate(m.group(2).split()):
+                mem[a + i] = int(x, 16)
+    missing = [a for a in range(ORIG_LO, ORIG_HI + 1) if a not in mem]
+    if missing or min(mem) != ORIG_LO or max(mem) != ORIG_HI:
+        raise SystemExit(f"{SRC_ASM}: cannot rebuild original image (missing {len(missing)} bytes)")
+    return bytearray(mem[a] for a in range(ORIG_LO, ORIG_HI + 1))
+
+
+def in_code(a):
+    return any(lo <= a <= hi for lo, hi in CODE_RANGES)
+
+
+# ------------------------------------------------------------------ compressed screens
+def scan_streams(img):
+    """Exactly what the original table builder at 0xC750 does (including its
+    jump into the middle of `ld de,2323h` to execute INC HL twice/three times)."""
+    b = lambda a: img[a - ORIG_LO]
+    table, hl = {}, BUILDER_START
+    hl += 1
+    while True:
+        a = b(hl)
+        if a == 0x09:
+            return table, hl                      # end marker
+        if a in (0x0A, 0x08, 0x0B):
+            hl += 2
+        elif a < 4:
+            hl += 3
+        elif a == 4:
+            idx = b(hl + 1) | (b(hl + 2) << 8)
+            hl += 3
+            table[idx] = hl
+        else:
+            hl += 1
+
+
+def decode_stream(rd, ptr):
+    """The game's decompressor (original 0xC6A3-0xC6F8) -> list of cells, plus overflow."""
+    out, hl = [], ptr - 1
+    for _ in range(20000):
+        hl += 1
+        a = rd(hl)
+        if a >= 0x20:
+            out.append(a)
+        elif a == 0x0A:
+            hl += 1
+            n = rd(hl) or 256
+            out.extend([out[-1]] * n)
+        elif a < 4:
+            hl += 1
+            tgt = (a << 8) | rd(hl)
+            if tgt < len(out):
+                raise SystemExit(f"stream at {ptr:04X}: negative fill")
+            out.extend([None] * (tgt - len(out)))          # None = fill byte (day/night dependent)
+        elif a == 6:
+            continue
+        else:
+            while len(out) < 1024:
+                out.append(None)
+            return out
+    raise SystemExit(f"stream at {ptr:04X} does not terminate")
+
+
+def plan_screens(orig):
+    table, end = scan_streams(orig)
+    markers = sorted((ptr - 3, idx, ptr) for idx, ptr in table.items())
+    assert markers[0][0] == BUILDER_START + 1, hex(markers[0][0])
+    chunks = []                                          # (old_marker_addr, idx, bytes)
+    for i, (m, idx, ptr) in enumerate(markers):
+        nxt = markers[i + 1][0] if i + 1 < len(markers) else end
+        chunks.append((m, idx, bytes(orig[m - ORIG_LO: nxt - ORIG_LO])))
+    assert orig[end - ORIG_LO] == 0x09
+    total = sum(len(c[2]) for c in chunks)
+
+    # greedy packing, biggest first, into regions (each reserves 1 byte for the 09 terminator)
+    free = {name: [lo, hi - lo - 1] for name, lo, hi in SCREEN_REGIONS}
+    placement = {}                                       # idx -> (region, offset)
+    region_items = {name: [] for name, _, _ in SCREEN_REGIONS}
+    region_items["D"] = []
+    for m, idx, data in sorted(chunks, key=lambda c: -len(c[2])):
+        for name, _, _ in SCREEN_REGIONS:
+            if free[name][1] >= len(data):
+                region_items[name].append((idx, data))
+                free[name][1] -= len(data)
+                break
+        else:
+            region_items["D"].append((idx, data))
+    return table, chunks, region_items, total
+
+
+def region_bytes(items):
+    """Concatenate chunks + terminator; return (bytes, {idx: offset_of_stream_data})."""
+    blob, offs = bytearray(), {}
+    for idx, data in items:
+        offs[idx] = len(blob) + 3                         # stream starts after the 3-byte marker
+        blob += data
+    blob.append(0x09)
+    return bytes(blob), offs
+
+
+# ------------------------------------------------------------------ patches
+HAL_SYMBOLS = {}                                          # filled after the HAL is assembled
+
+
+def u16(v):
+    return bytes([v & 255, v >> 8])
+
+
+def call(sym):
+    return b"\xCD" + u16(HAL_SYMBOLS[sym])
+
+
+def jp(addr):
+    return b"\xC3" + u16(addr)
+
+
+NOP = b"\x00"
+
+
+def build_patches():
+    """(address, expected original bytes, replacement bytes, description)"""
+    P = []
+
+    def add(addr, old, new, why):
+        new = bytes(new)
+        assert len(new) <= len(old), (hex(addr), len(new), len(old))
+        new = new + NOP * (len(old) - len(new))
+        P.append((addr, bytes(old), new, why))
+
+    # --- video RAM copies: ld de,3C00h / ld bc,0400h / [push bc] / ldir
+    add(0x5577, bytes.fromhex("11 00 3c 01 00 04 c5 ed b0"), call("vz_blit_site1"),
+        "buffer 4 -> screen, plus HUD; keeps the original push bc")
+    for a in (0x5A7E, 0x5AFD, 0x602A, 0x607B):
+        add(a, bytes.fromhex("11 00 3c 01 00 04 ed b0"), call("vz_blit_frame"), "buffer -> screen")
+    # --- keyboard
+    for a in (0x5404, 0x54E5, 0x5DBC, 0x5F27):
+        add(a, bytes.fromhex("3a 40 38"), call("vz_read_kbd_3840"), "TRS-80 keyboard row 0x3840")
+    add(0x5507, bytes.fromhex("3a 04 38"), call("vz_read_kbd_3804"), "TRS-80 keyboard row 0x3804 (S/T sound keys)")
+    add(0xC9FD, bytes.fromhex("3a ff 38 4f 3e ff 2f b1 c9"), call("vz_check_fire") + b"\xC9",
+        "any-key poll (NZ = key down)")
+    # --- sound: out (80h),a  (the game also poked the port number into these instructions)
+    add(0x5C11, bytes.fromhex("32 1c 5c"), b"", "self-modifying port store (target instruction is patched)")
+    add(0x5C14, bytes.fromhex("32 2b 5c"), b"", "self-modifying port store (target instruction is patched)")
+    add(0xC796, bytes.fromhex("32 f8 c7"), b"", "self-modifying port store (target instruction is patched)")
+    add(0xC799, bytes.fromhex("32 08 c8"), b"", "self-modifying port store (target instruction is patched)")
+    add(0x5C1B, bytes.fromhex("d3 80 c5 10 fe 10 fe 10 fe c1"), call("vz_snd_burst"), "sound out + delay")
+    add(0x5C29, bytes.fromhex("af d3 80"), call("vz_snd_silence"), "sound off")
+    add(0xC7F6, bytes.fromhex("08 d3 80 08"), call("vz_snd_exaf"), "music sound out")
+    add(0xC807, bytes.fromhex("d3 80 18 f1"), jp(HAL_SYMBOLS["vz_snd_c807"]), "music sound out (then jr 0xC7FC)")
+    # --- TRSDOS (high-score disk file) bypass
+    add(0x536D, bytes.fromhex("cd 24 44 cc 36 44 cc 28 44 28 05 fe 18 c2 09 44"), jp(0x537D),
+        "skip TRSDOS high-score read")
+    add(0x5ACA, bytes.fromhex("cd 20 44 cc 39 44 cc 28 44 c2 09 44"), b"", "skip TRSDOS high-score write")
+    # --- compressed-screen table: filled by vz_init_screen_table instead
+    add(0xC750, bytes.fromhex("01 12 e2"), jp(HAL_SYMBOLS["vz_init_screen_table"]),
+        "table builder: fill the screen table from the generated list instead of scanning")
+    return P
+
+
+def apply_patches(img, patches):
+    for addr, old, new, why in patches:
+        i = addr - ORIG_LO
+        if bytes(img[i:i + len(old)]) != old:
+            raise SystemExit(f"patch {addr:04X}: unexpected original bytes {bytes(img[i:i+len(old)]).hex(' ')}")
+        img[i:i + len(new)] = new
+
+
+# ------------------------------------------------------------------ HAL assembly
+def load_corrected_font():
+    txt = open(FONT_SRC).read()
+    rows = re.findall(r"DEFB\s+((?:0x[0-9A-Fa-f]{2},?){5})", txt)
+    if len(rows) != 64:
+        raise SystemExit(f"{FONT_SRC}: expected 64 glyph rows, found {len(rows)}")
+    out = ["; Corrected PRN_GFX_FONT, 64 glyphs x 5 column bytes (active-low).",
+           "; Generated from corrected_table.asm -- do not hand-edit.", "vz_font_src:"]
+    for i, r in enumerate(rows):
+        out.append("\tdefb\t" + ",".join(f"0{b[2:].upper()}h" for b in r.split(",")) + f"\t\t; glyph {i:02X}")
+    out.append("vz_font_src_end:")
+    return "\n".join(out) + "\n"
+
+
+def assemble_hal(screen_entries, extra_blob):
+    equ = [f"HAL_BASE EQU 0{HAL_BASE:04X}h", f"TILE_CACHE EQU 0{TILE_CACHE:04X}h",
+           f"SCREEN_TABLE EQU 0{SCREEN_TABLE:04X}h", f"GAME_ENTRY EQU 0{GAME_ENTRY:04X}h",
+           f"SND_ENABLE EQU 0{SND_ENABLE:04X}h", f"HUD_SCORE EQU 0{HUD_SCORE:04X}h",
+           f"HUD_LEVEL10 EQU 0{HUD_LEVEL10:04X}h", f"HUD_LEVEL1 EQU 0{HUD_LEVEL1:04X}h",
+           f"HUD_GHOST10 EQU 0{HUD_GHOST10:04X}h", f"HUD_GHOST1 EQU 0{HUD_GHOST1:04X}h"]
+    lst = ["", "; compressed-screen list: screen index, address of its stream (after the 04 marker)",
+           "vz_screen_list:"]
+    for idx, ptr in screen_entries:
+        lst.append(f"\tdefw\t0{idx:04X}h,0{ptr:04X}h")
+    lst.append("\tdefw\t0FFFFh")
+    src = f"\torg\t0{HAL_BASE:04X}h\n" + "\n".join(equ) + "\n" + open(HAL_SRC).read() + "\n" + load_corrected_font() \
+        + "\n".join(lst) + "\nvz_hal_end:\n"
+    open("ghost13_hal.asm", "w").write(src)
+    asm = shutil.which("z88dk-z80asm")
+    if not asm:
+        raise SystemExit("z88dk-z80asm not found (install z88dk, or source vz-toolbox/env.sh)")
+    for f in ("ghost13_hal.bin", "ghost13_hal.map", "ghost13_hal.o"):
+        if os.path.exists(f):
+            os.remove(f)
+    res = subprocess.run([asm, "-b", "-m", "ghost13_hal.asm"], capture_output=True, text=True)
+    if res.returncode != 0 or not os.path.exists("ghost13_hal.bin"):
+        raise SystemExit("assembling ghost13_hal.asm failed:\n" + res.stdout + res.stderr)
+    code = open("ghost13_hal.bin", "rb").read()
+    syms = {}
+    for m in re.finditer(r"^(\w+)\s+= \$([0-9A-F]+)", open("ghost13_hal.map").read(), re.M):
+        syms[m.group(1)] = int(m.group(2), 16)
+    return code, syms
+
+
+# ------------------------------------------------------------------ packing .vz
+def write_vz(path, name, start, data):
+    base = path[:-3]
+    open(base + ".bin", "wb").write(data)
+    if VZPACK and os.path.exists(VZPACK):
+        r = subprocess.run([VZPACK, "--in-bin", base + ".bin", "-s", hex(start), "-o", path, "-t", "mc", "-n", name],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return
+        print("vzpack failed, writing the container directly:", r.stderr.strip())
+    with open(path, "wb") as f:
+        f.write(b"VZFO" + name.encode().ljust(17, b"\0")[:17] + b"\xf1" + struct.pack("<H", start) + data)
+
+
+def main():
+    orig = recon_original()
+    pristine = bytes(orig)
+    print(f"original image rebuilt from {SRC_ASM}: {len(orig)} bytes at {ORIG_LO:04X}-{ORIG_HI:04X}")
+
+    table, chunks, region_items, total = plan_screens(orig)
+    print(f"{len(chunks)} compressed screens, {total} bytes, split into regions: " +
+          ", ".join(f"{k}:{len(v)}" for k, v in region_items.items()))
+
+    # pass 1: assemble the HAL with dummy screen addresses to learn its size
+    dummy = [(idx, 0) for idx in sorted(table)]
+    code, syms = assemble_hal(dummy, b"")
+    HAL_SYMBOLS.update(syms)
+    d_blob, d_offs = region_bytes(region_items["D"])
+    d_base = HAL_BASE + len(code)
+
+    # final screen addresses
+    new_ptr = {}
+    layout = {}
+    for name, lo, hi in SCREEN_REGIONS:
+        blob, offs = region_bytes(region_items[name])
+        assert len(blob) <= hi - lo, (name, len(blob), hi - lo)
+        layout[name] = (lo, blob)
+        for idx, off in offs.items():
+            new_ptr[idx] = lo + off
+    layout["D"] = (d_base, d_blob)
+    for idx, off in d_offs.items():
+        new_ptr[idx] = d_base + off
+    entries = [(idx, new_ptr[idx]) for idx in sorted(new_ptr)]
+    code, syms2 = assemble_hal(entries, b"")
+    assert syms2 == syms and d_base == HAL_BASE + len(code), "HAL changed size between passes"
+    hal_total = len(code) + len(d_blob)
+    if HAL_BASE + hal_total >= TILE_CACHE:
+        raise SystemExit(f"HAL + screen piece D ({hal_total} bytes) overlaps the tile cache at {TILE_CACHE:04X}")
+
+    # patch the original game bytes
+    patches = build_patches()
+    apply_patches(orig, patches)
+    changed = [i for i in range(len(orig)) if orig[i] != pristine[i]]
+    print(f"patched {len(patches)} sites, {len(changed)} bytes differ from the original binary:")
+    for addr, old, new, why in patches:
+        print(f"   {addr:04X}  {old.hex(' ')}  ->  {new.hex(' ')}   {why}")
+
+    # ---- build the three tape files
+    def at(addr):
+        return addr - ORIG_LO
+
+    # file 1: 4000-67FF
+    f1 = bytearray(0x6800 - 0x4000)
+    f1[0:8] = STUB_CODE(0x4007)
+    lo, blob = layout["C"]
+    f1[lo - 0x4000: lo - 0x4000 + len(blob)] = blob
+    f1[0x5200 - 0x4000: 0x644B - 0x4000] = orig[at(0x5200): at(0x644B)]
+    lo, blob = layout["A"]
+    f1[lo - 0x4000: lo - 0x4000 + len(blob)] = blob
+    # file 2: 7AE8-CA05
+    f2 = bytearray(ORIG_HI + 1 - 0x7AE8)
+    f2[0:8] = STUB_CODE(0x7AEF)
+    lo, blob = layout["B"]
+    f2[lo - 0x7AE8: lo - 0x7AE8 + len(blob)] = blob
+    f2[0x886C - 0x7AE8:] = orig[at(0x886C):]
+    # file 3: HAL + piece D
+    f3 = code + d_blob
+
+    # ---- verify: every screen decodes identically from its new home
+    mem = bytearray(65536)
+    mem[0x4000:0x6800] = f1
+    mem[0x7AE8:ORIG_HI + 1] = f2
+    mem[HAL_BASE:HAL_BASE + len(f3)] = f3
+    rd_new = lambda a: mem[a]
+    rd_old = lambda a: pristine[a - ORIG_LO]
+    for idx in sorted(table):
+        a = decode_stream(rd_old, table[idx])
+        b = decode_stream(rd_new, new_ptr[idx])
+        if a != b:
+            raise SystemExit(f"screen {idx:02X} decodes differently after the move")
+    print(f"verified: all {len(table)} screens decode identically from their new addresses")
+    # the part of the original that was NOT patched or moved must be byte-identical
+    untouched = bytearray(pristine)
+    for addr, old, new, why in patches:
+        untouched[at(addr): at(addr) + len(old)] = old
+    assert untouched == pristine
+    check = bytearray(65536)
+    check[0x5200:0x644B] = mem[0x5200:0x644B]
+    check[0x886C:ORIG_HI + 1] = mem[0x886C:ORIG_HI + 1]
+    diff = [a for a in list(range(0x5200, 0x644B)) + list(range(0x886C, ORIG_HI + 1))
+            if check[a] != pristine[a - ORIG_LO]]
+    assert set(diff) == {ORIG_LO + i for i in changed if ORIG_LO + i < 0x644B or ORIG_LO + i >= 0x886C}, \
+        "unexpected differences from the original"
+
+    write_vz("ghost13_p1.vz", "13GHOSTS1", 0x4000, bytes(f1))
+    write_vz("ghost13_p2.vz", "13GHOSTS2", 0x7AE8, bytes(f2))
+    write_vz("ghost13_p3.vz", "13GHOSTS3", HAL_BASE, bytes(f3))
+    for p in ("ghost13_p1.vz", "ghost13_p2.vz", "ghost13_p3.vz"):
+        print(f"wrote {p} ({os.path.getsize(p)} bytes)")
+    # a flat 64K memory image for emulator / test use
+    open("ghost13_ram.bin", "wb").write(bytes(mem))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

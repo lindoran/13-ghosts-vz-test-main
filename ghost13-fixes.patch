@@ -1,0 +1,344 @@
+diff --git a/Makefile b/Makefile
+index a95dd22..6ffd1cb 100644
+--- a/Makefile
++++ b/Makefile
+@@ -26,6 +26,7 @@ STAGE1_WAV = stage1.wav
+ # ---- stage 2: the game ----
+ STAGE2_PORT_SCRIPT = port_13ghosts_v7.py
+ STAGE2_SRC_ASM     = ghost13b.asm
++STAGE2_FONT_SRC    = VZ200_basic_ROM_listing/corrected_table.asm
+ STAGE2_ASM = ghost13_vz.asm
+ STAGE2_BIN = ghost13_vz.bin
+ STAGE2_VZ  = ghost13_vz.vz
+@@ -64,7 +65,7 @@ stage1: $(STAGE1_WAV)
+ # without make. The rules below are what make actually relies on; they're
+ # idempotent against the script's own output since both use LOAD_ORG.
+ # ---------------------------------------------------------------------------
+-$(STAGE2_BIN): $(STAGE2_PORT_SCRIPT) $(STAGE2_SRC_ASM)
++$(STAGE2_BIN): $(STAGE2_PORT_SCRIPT) $(STAGE2_SRC_ASM) $(STAGE2_FONT_SRC)
+ 	$(PYTHON) $(STAGE2_PORT_SCRIPT)
+ 
+ $(STAGE2_VZ): $(STAGE2_BIN)
+diff --git a/README.md b/README.md
+index 033d8bb..ffff69f 100644
+--- a/README.md
++++ b/README.md
+@@ -65,6 +65,23 @@ for this source.
+ - `vz2wav-decompile-main/` (your repo) — source for `vzpack`/`vz2wav`/`wav2vz`. `dist/linux.zip` has working prebuilt x86-64 binaries despite the `ia64-linux` directory name.
+ - `z88dk-master.zip` — source for `z88dk-z80asm`. Needs 4 git submodules (`uthash`, `optparse`, `regex`, `UNIXem`) that a plain GitHub zip download doesn't include.
+ 
++## Font table (corrected, embedded)
++
++The VZ200 ROM's `PRN_GFX_FONT` (0x3B94) has 17 bad bytes across 10 glyphs
++(`VZ200_basic_ROM_listing/README-Font issue.md`; confirmed against a real
++ROM dump). The ROM can't be patched, so `port_13ghosts_v7.py` now parses
++`VZ200_basic_ROM_listing/corrected_table.asm`, emits it into the game image
++as `vz_font_src` (320 bytes, after the HAL), and `vz_build_font_cache`
++reads that copy -- the ROM font is no longer touched. `make` rebuilds
++automatically when `corrected_table.asm` changes. Stage 1 is unchanged.
++
++`verify_hud_render.py NEW.bin NEW.map OLD.bin OLD.map` runs the real boot + `vz_draw_hud_row` for a new and an old (ROM-font) build and renders the HUD strip to `hud_render_corrected_font.png` (maps from `z88dk-z80asm -b -m`).
++
++`verify_font_cache.py` runs the real boot path in the Z80 emulator with the
++ROM font region deliberately poisoned and checks the 1024-byte tile cache
++against an independent Python reference; it also writes
++`font_cache_corrected.png`. (`pip install z80 pillow`.)
++
+ ---
+ 
+ ## Superseded — moved to `archive/`
+diff --git a/port_13ghosts_v7.py b/port_13ghosts_v7.py
+index 81e91a6..bd4550d 100644
+--- a/port_13ghosts_v7.py
++++ b/port_13ghosts_v7.py
+@@ -31,11 +31,69 @@ VZ2WAV  = "/home/david/Documents/vz2wav-decompile/bin/ia64-linux/vz2wav"
+ # code. 0x7AE8 is the ROM's own documented "start of user RAM" (see the
+ # comment at export.lst address 0x00A8) and sits well clear of all of it.
+ LOAD_ORG = 0x7AE8
++
++# The VZ200 ROM's PRN_GFX_FONT (0x3B94) has 17 bad bytes across 10 glyphs
++# (confirmed against a real ROM dump -- see VZ200_basic_ROM_listing/
++# README-Font issue.md). The ROM can't be fixed, so the corrected table
++# is embedded in the game image and the tile cache is built from that copy.
++FONT_SRC = os.path.join("VZ200_basic_ROM_listing", "corrected_table.asm")
+ # ----------------------------------------------------------------------- --
+ 
++# ---------------------------------------------------------------------------
++# DATA REGIONS.  z80dasm is a linear sweep: level/sprite tables embedded in
++# the TRS-80 image were disassembled as "instructions", many with a 16-bit
++# operand that happens to look like an in-image address (ld bc,laa06h ...).
++# Treating those as real code makes this script (a) rewrite buffer addresses
++# (0CA12h ...) inside the data and (b) relocate their label operands by the
++# 0x28D3 load shift -- silently corrupting the compressed level stream, which
++# the decompressor at 0xC665..0xC6F8 then expands with garbage run lengths
++# (an LDIR with BC=0xFF00 that overwrites all of RAM).  Found by running the
++# tape in the RC39/VZ200 emulator.  Everything in these ORIGINAL-address
++# ranges is emitted as raw bytes (labels kept, so addresses still resolve):
++#   0x5200-0x5359  header table before the entry point (0x535A)
++#   0x60A9-0xC586  level/sprite data between the first code block (ends with
++#                  "jp lc600h" at 0x60A6) and the code that resumes at 0xC587
++DATA_RANGES = [(0x5200, 0x5359), (0x60A9, 0xC586)]
++
++def freeze_data_regions(lines):
++    out = []
++    n_frozen = 0
++    pat = re.compile(r";([0-9a-f]{4})\t((?:[0-9a-f]{2} )+)")
++    for line in lines:
++        m = pat.search(line)
++        if m and not line.lstrip().startswith(";"):
++            addr = int(m.group(1), 16)
++            if any(lo <= addr <= hi for lo, hi in DATA_RANGES):
++                bs = m.group(2).split()
++                # keep the original ";addr<TAB>bytes" tail verbatim: later
++                # passes key off it (base-label placement, the 0x5200 skip)
++                out.append("\tdefb\t" + ",".join(f"0{b.upper()}h" for b in bs) +
++                           "\t\t" + line[m.start():])
++                n_frozen += 1
++                continue
++        out.append(line)
++    print(f"freeze_data_regions: {n_frozen} instruction lines -> raw defb")
++    return out
++
++def load_corrected_font():
++    """Parse corrected_table.asm -> 64 glyphs x 5 bytes; return DEFB source."""
++    txt = open(FONT_SRC).read()
++    rows = re.findall(r"DEFB\s+((?:0x[0-9A-Fa-f]{2},?){5})", txt)
++    if len(rows) != 64:
++        raise SystemExit(f"{FONT_SRC}: expected 64 glyph rows, found {len(rows)}")
++    out = ["; Corrected PRN_GFX_FONT, 64 glyphs x 5 column bytes (active-low).",
++           "; Generated from " + FONT_SRC.replace("\\", "/") + " -- do not hand-edit.",
++           "vz_font_src:"]
++    for i, r in enumerate(rows):
++        out.append("\tdefb\t" + ",".join(f"0{b[2:].upper()}h" for b in r.split(",")) +
++                   f"\t\t; glyph {i:02X}")
++    out.append("vz_font_src_end:")
++    return "\n".join(out) + "\n"
++
+ def main():
+     with open(SRC_ASM, "r") as f:
+         lines = f.readlines()
++    lines = freeze_data_regions(lines)
+ 
+     out_lines = []
+     
+@@ -156,13 +214,13 @@ def main():
+         "0c906h": "lc906h",
+         "0c909h": "lc909h",
+ 
+-        # Buffer remapping into 10K RAM window (0x4000-0x5600)
++        # Buffer remapping into 10K RAM window (0x4000-0x57FF incl. 0x400 slack after buffer 4; table 0x5800)
+         "0ca12h": "04000h", # Buffer 0
+         "0ce12h": "04400h", # Buffer 1
+         "0d212h": "04800h", # Buffer 2
+         "0d612h": "04c00h", # Buffer 3
+         "0da12h": "05000h", # Buffer 4
+-        "0e212h": "05400h", # Pointer table
++        "0e212h": "05800h", # Pointer table -- NOT at 0x5400: the scroll code at 0x6051-0x6076 LDIRs 0x400 bytes to buffer4+k*0x40 (k<=15), overrunning buffer 4 by up to 0x3C0 bytes. The original layout keeps a 0x400 slack gap (0xDE12-0xE211) before the table; so do we (0x5400-0x57FF).
+         "0ddd2h": "053c0h", # Buffer 4 + 0x3C0 = row 15, the one-row HUD. (was 053d2h -- 18 bytes off, HUD copy overran into the pointer table)
+         "0cc92h": "04280h", # Buffer 0 + 0x280
+         "0ccd5h": "042c3h", # Buffer 0 + 0x2C3
+@@ -338,12 +396,20 @@ vz_boot:
+ \tld\t(hl), 000h
+ \tldir
+ 
+-\t; 4. Clear the 5 game buffers at 0x4000-0x55FF with 0x80 (TRS-80 blank semigraphics)
++\t; 4. Clear the 5 game buffers + the 0x400 slack after buffer 4 (0x4000-0x57FF)
++\t;    with 0x80 (TRS-80 blank semigraphics), then zero the 512-byte
++\t;    decompressor pointer table at 0x5800-0x59FF (unused entries must be 0:
++\t;    a zero pointer is how the decompressor reports "no such screen").
+ \tld\thl, 04000h
+ \tld\tde, 04001h
+-\tld\tbc, 015ffh
++\tld\tbc, 017ffh
+ \tld\t(hl), 080h
+ \tldir
++\tld\thl, 05800h
++\tld\tde, 05801h
++\tld\tbc, 001ffh
++\tld\t(hl), 000h
++\tldir
+ 
+ \t; 5. Set stack to top of RAM
+ \tld\tsp, 0ffffh
+@@ -728,7 +794,7 @@ vz_draw_glyph:
+ \tadd\thl, hl
+ \tadd\thl, hl
+ \tadd\thl, hl\t\t; hl = char_code * 16
+-\tld\tbc, 05600h\t\t; FONT_TILE_CACHE
++\tld\tbc, 05a00h\t\t; FONT_TILE_CACHE
+ \tadd\thl, bc
+ \tld\tb, 8
+ vdg_row_loop:
+@@ -823,7 +889,8 @@ vhr_score_loop:
+ ; ---------------------------------------------------------------------------
+ ; Text-mode font cache (see texmode-issues.md).
+ ;
+-; Converts the VZ200 ROM's PRN_GFX_FONT table (0x3B94: 64 glyphs, 5
++; Converts the corrected PRN_GFX_FONT table (embedded at vz_font_src; the
++; ROM copy at 0x3B94 has typos and is no longer read) (64 glyphs, 5
+ ; bytes each, column-major, INVERTED polarity -- confirmed against the
+ ; ROM's own "inverse character output" comment and the space glyph
+ ; being 0xFF x5) into 64 cached 8x8 Mode-1 tiles (16 bytes each, 2
+@@ -846,8 +913,8 @@ vhr_score_loop:
+ ; was wired into the build.
+ ; ---------------------------------------------------------------------------
+ vz_build_font_cache:
+-\tld\thl, 03b94h\t\t; PRN_GFX_FONT
+-\tld\tde, 05600h\t\t; FONT_TILE_CACHE
++\tld\thl, vz_font_src\t; corrected copy embedded below (NOT the ROM's)
++\tld\tde, 05a00h\t\t; FONT_TILE_CACHE
+ \tld\tb, 64
+ fc_glyph_loop:
+ \tpush\tbc
+@@ -977,6 +1044,7 @@ fc_dst_row:  defw 0
+ ; End of HAL
+ """
+     out_lines.append(hal_code)
++    out_lines.append(load_corrected_font())
+ 
+     print(f"Writing {OUT_ASM} ({len(out_lines)} lines)...")
+     with open(OUT_ASM, "w") as f:
+diff --git a/verify_font_cache.py b/verify_font_cache.py
+new file mode 100644
+index 0000000..c024d6f
+--- /dev/null
++++ b/verify_font_cache.py
+@@ -0,0 +1,63 @@
++import z80, re, sys
++ORG=0x7AE8
++b=open('ghost13_vz.bin','rb').read()
++rom=bytearray(open('VZ200_basic_ROM_listing/refrence_rom.bin','rb').read())
++txt=open('VZ200_basic_ROM_listing/corrected_table.asm').read()
++rows=re.findall(r'DEFB\s+((?:0x[0-9A-Fa-f]{2},?){5})',txt)
++tab=bytes(int(x,16) for r in rows for x in r.split(','))
++
++def ref_cache(t):
++    out=bytearray()
++    for g in range(64):
++        cols=t[g*5:g*5+5]
++        for r in range(8):
++            px=[3 if not (c>>r)&1 else 0 for c in cols]+[0,0,0]
++            out.append(px[0]<<6|px[1]<<4|px[2]<<2|px[3])
++            out.append(px[4]<<6|px[5]<<4|px[6]<<2|px[7])
++    return bytes(out)
++
++# locate vz_boot's "ld sp,0FFFFh / call X / jp Y"
++vb=b.find(bytes([0xF3,0x3E,0x08,0xD3,0x70])); k=b.find(bytes([0x31,0xFF,0xFF,0xCD]),vb)
++call_at=ORG+k+3
++jp_at=call_at+3
++assert b[k+6]==0xC3
++print("call build_font_cache @",hex(call_at),"-> game entry jp @",hex(jp_at),"target",hex(b[k+7]|b[k+8]<<8))
++
++def run(poison):
++    m=z80.Z80Machine()
++    r=bytearray(rom)
++    if poison: r[0x3B94:0x3B94+320]=bytes([0x55])*320   # trash the ROM font
++    m.set_memory_block(0,bytes(r))
++    m.set_memory_block(ORG,b)           # RAM-backed 0x4000+ in this sim
++    m.pc=ORG; m.sp=0xFFFF
++    m.set_breakpoint(jp_at)
++    for _ in range(200):
++        m.ticks_to_stop=2_000_000
++        ev=m.run()
++        if m.pc==jp_at: break
++    mem=bytes(m.get_state_view())[0x2C:0x2C+65536]
++    return m.pc, mem[0x5A00:0x5A00+1024]
++
++for poison in (False,True):
++    pc,cache=run(poison)
++    print(f"poisoned_rom={poison}: stopped pc={pc:#06x}",
++          "cache == corrected-table reference:", cache==ref_cache(tab),
++          "| == buggy-ROM reference:", cache==ref_cache(bytes(rom[0x3B94:0x3B94+320])))
++
++from PIL import Image  # optional: contact-sheet PNG
++pc,cache=run(True)
++S=6; names="@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^<- !\"#$%&'()*+,-./0123456789:;<=>?"
++fixed=[0x18,0x1F,0x23,0x24,0x2A,0x2C,0x33,0x35,0x3C,0x3E]
++img=Image.new("RGB",(16*9*S,4*9*S),(0,40,0))
++for g in range(64):
++    gx,gy=(g%16)*9*S,(g//16)*9*S
++    for r in range(8):
++        for bi in range(2):
++            byte=cache[g*16+r*2+bi]
++            for p in range(4):
++                if (byte>>(6-2*p))&3:
++                    x=(bi*4+p)
++                    for dx in range(S):
++                        for dy in range(S):
++                            img.putpixel((gx+x*S+dx,gy+r*S+dy),(255,120,0) if g in fixed else (230,230,230))
++img.save('font_cache_corrected.png'); print("fixed glyphs (orange):",[hex(f) for f in fixed])
+diff --git a/verify_hud_render.py b/verify_hud_render.py
+new file mode 100644
+index 0000000..bd529e8
+--- /dev/null
++++ b/verify_hud_render.py
+@@ -0,0 +1,69 @@
++#!/usr/bin/env python3
++"""Run the real boot + vz_draw_hud_row in the Z80 emulator for the NEW build
++(embedded corrected font) and an OLD build (ROM font), render the HUD strip.
++usage: verify_hud_render.py NEW.bin NEW.map OLD.bin OLD.map"""
++import sys, re, z80
++from PIL import Image
++ORG=0x7AE8
++ROM=bytearray(open('VZ200_basic_ROM_listing/refrence_rom.bin','rb').read())
++
++def syms(p):
++    return {m.group(1):int(m.group(2),16) for m in re.finditer(r'^(\w+)\s+= \$([0-9A-F]+)',open(p).read(),re.M)}
++
++def run_hud(binp,mapp,fields):
++    b=open(binp,'rb').read(); S=syms(mapp)
++    m=z80.Z80Machine()
++    m.set_memory_block(0,bytes(ROM)); m.set_memory_block(ORG,b)
++    # boot up to (not including) the jump into the game
++    k=b.find(bytes([0x31,0xFF,0xFF,0xCD]),S['vz_boot']-ORG); jp_at=ORG+k+6
++    m.pc=S['vz_boot']; m.sp=0xFFFF; m.set_breakpoint(jp_at)
++    for _ in range(300):
++        m.ticks_to_stop=2_000_000; m.run()
++        if m.pc==jp_at: break
++    else: raise SystemExit("boot did not reach game entry")
++    m.clear_breakpoint(jp_at)
++    for addr,val in fields.items():           # TRS-80 ASCII bytes in HUD row
++        m.set_memory_block(addr,bytes([val]))
++    ret=0x0100; m.set_memory_block(ret,b'\x00')
++    m.sp=0xFFF0; m.set_memory_block(0xFFF0,bytes([ret&255,ret>>8]))
++    m.pc=S['vz_draw_hud_row']; m.set_breakpoint(ret)
++    for _ in range(300):
++        m.ticks_to_stop=2_000_000; m.run()
++        if m.pc==ret: break
++    else: raise SystemExit("HUD routine did not return")
++    return bytes(m.get_state_view())[0x2C+0x7000:0x2C+0x7800]
++
++def hud_fields(score,level,ghost):
++    f={}
++    for i,c in enumerate(score): f[0x53CC+i]=ord(c)
++    f[0x53F2]=ord(level[0]); f[0x53F3]=ord(level[1])
++    f[0x53FD]=ord(ghost[0]); f[0x53FE]=ord(ghost[1])
++    return f
++
++PAL={0:(0,60,0),1:(230,230,60),2:(60,60,230),3:(255,255,255)}
++def strip(vram,S=6):
++    img=Image.new("RGB",(128*S,8*S))
++    for r in range(8):
++        for x in range(128):
++            v=(vram[(56+r)*32+x//4]>>(6-2*(x%4)))&3
++            for dx in range(S):
++                for dy in range(S): img.putpixel((x*S+dx,r*S+dy),PAL[v])
++    return img
++
++tests={"A (digits 3 and 5, the fixed glyphs)":("33355","53","35"),
++       "B (digits unchanged by the fix)":("01247","68","09")}
++new,newm,old,oldm=sys.argv[1:5]
++rows=[];ok=True
++for name,(sc,lv,gh) in tests.items():
++    f=hud_fields(sc,lv,gh)
++    vn=run_hud(new,newm,f); vo=run_hud(old,oldm,f)
++    same=vn[56*32:]==vo[56*32:]
++    print(f"test {name}: new vs old HUD strip identical = {same}")
++    rows += [(f"OLD ROM font  {sc} L{lv} G{gh}",strip(vo)),(f"NEW corrected  {sc} L{lv} G{gh}",strip(vn))]
++    if name.startswith("B") and not same: ok=False
++    if name.startswith("A") and same: ok=False
++W=rows[0][1].width; H=rows[0][1].height
++sheet=Image.new("RGB",(W,(H+6)*len(rows)),(20,20,20))
++for i,(n,im) in enumerate(rows): sheet.paste(im,(0,i*(H+6)))
++sheet.save("hud_render_corrected_font.png")
++print("expectation (A differs, B identical):","PASS" if ok else "FAIL")

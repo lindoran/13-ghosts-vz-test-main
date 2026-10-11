@@ -5,17 +5,34 @@ RC39 Backplane Clone (Z80, MC6847 Mode 1). This README is a map of the
 repository — what's current, what's historical, and how to build the
 final tape image.
 
-## Architecture, in one paragraph
+## Architecture (v8: patch in place, do not relocate)
 
-The game is disassembled TRS-80 Z80 code with a hand-written VZ200
-hardware-abstraction layer (video blit, keyboard, sound, font cache)
-appended to it, patched and reassembled to run at `0x7AE8`. It loads in
-**two stages** over cassette: a tiny bootstrap (`stage1`) loads first,
-forces the RC39's bank register to bank 0 (the only bank with no memory
-aliasing hazards — see `STAGE1_NOTES.md`), then calls back into the
-VZ200 ROM's own tape loader to load the game itself. The two stages are
-packed and encoded separately, then their WAV audio is concatenated
-into one continuous tape image.
+The game stays **byte for byte at its original TRS-80 addresses**
+(`0x5200-0xCA05`).  `port_13ghosts_v8.py` rebuilds the original binary from
+`ghost13b.asm`, patches about 25 TRS-80-specific instructions in place (video
+copies, keyboard, sound, TRSDOS) so they call into `hal_vz.asm` (the VZ200/RC39
+replacement routines), and writes three tape files.  Nothing else changes.
+
+Earlier versions (v1-v7, now in `archive/`) disassembled the binary, shifted it
+to `0x7AE8` and re-assembled it with symbolic labels.  That cannot work reliably
+from a linear disassembly: level data was relocated as if it were code, byte
+pairs used as opcodes by the day/night patch were relocated as if they were
+addresses, and the animation/sprite tables - which hold absolute TRS-80
+addresses - could not be relocated at all.  Keeping the original addresses
+removes that whole class of bugs.
+
+The one thing that has to move is the block of 34 compressed screens
+(`0x644B-0x886B`): it sits exactly on the VZ200's I/O + video RAM
+(`0x6800-0x77FF`).  The screens are position-independent (the game finds them
+through a table it builds at start-up), so the patcher splits them into pieces
+that fit the free RAM and the table is filled from a generated list instead
+of by the game's scan.  See the docstring of `port_13ghosts_v8.py` for the map.
+
+The tape has **four files**: `stage1` (forces bank 0 + 10K RAM window, loads the
+next file through the VZ200 ROM loader), part 1 (`0x4000-0x67FF`), part 2
+(`0x7AE8-0xCA05`), part 3 (`0xE420`, the replacement routines; its start address
+`vz_boot` jumps into the game).  Parts 1 and 2 begin with an 8-byte stub that
+loads the following file.  Their WAVs are concatenated into one tape.
 
 ## Quick start
 
@@ -24,7 +41,7 @@ make VZPACK=/path/to/vzpack VZ2WAV=/path/to/vz2wav
 ```
 
 Produces `ghost13_two_stage.wav` — the file to actually load on
-hardware or an emulator. `make stage1` / `make stage2` build just one
+hardware or an emulator. `make stage1` / `make parts` build just one
 side; `make clean` removes all generated output. `VZPACK`/`VZ2WAV`
 default to the paths in the `Makefile`; override them if yours live
 elsewhere.
@@ -40,13 +57,15 @@ for this source.
 | File | What it is |
 |---|---|
 | `cmd_tools.py` | Parses TRS-80 TRSDOS `.cmd` load-module format, reassembles a flat memory image. Standalone; not part of the VZ200 build itself, but what originally produced `ghost13b.asm`'s source bytes. |
-| `ghost13b.asm` | Full `z80dasm` disassembly of the original TRS-80 game (the un-protection-patched variant — see `PORTING_NOTES.md`). This is the **input** `port_13ghosts_v4.py` patches into the VZ200 build. |
-| `port_13ghosts_v4.py` | **Current** porting script. Patches `ghost13b.asm` (buffer remaps, keyboard/sound HAL calls, TRSDOS bypasses, font-cache init) into `ghost13_vz.asm`, assembles it, and (when it can find real `vzpack`/`vz2wav` at the hardcoded paths) packs and encodes it too — the `Makefile` rules are what's authoritative, this is a convenience for running the script directly. |
-| `stage1.asm` | The two-stage-load bootstrap (11 bytes): force bank 0, call the ROM's `TAPE_LOAD_COMMON` to load stage 2. |
-| `Makefile` | The build chain. `make` → `ghost13_two_stage.wav`. |
-| `splice_wav.py` | Concatenates stage1.wav + stage2.wav into the final tape image. Generic — works for any number of same-format WAV segments. |
+| `ghost13b.asm` | Full `z80dasm` disassembly of the original TRS-80 game (the un-protection-patched variant — see `PORTING_NOTES.md`). v8 uses it only to **recover the original bytes** (from its `;addr<TAB>bytes` comments); its instruction text is no longer assembled. |
+| `port_13ghosts_v8.py` | **Current** porting script (patch in place; see above). Writes `ghost13_p1/p2/p3.vz` (+ `.bin`), `ghost13_hal.asm/.map`, and `ghost13_ram.bin` (flat 64K image of everything loaded, for emulator tests). |
+| `hal_vz.asm` | The VZ200/RC39 replacement routines the patched game calls: boot, screen-table fill, video blit + HUD, keyboard, sound, font tile cache. |
+| `stage1.asm` | The bootstrap (12 bytes): bank 0 + RAM in the 4000-67FF window, then call the ROM's `TAPE_LOAD_COMMON` to load the next file. |
+| `Makefile` | The build chain. `make` → `ghost13_two_stage.wav` (stage1 + 3 parts). |
+| `splice_wav.py` | Concatenates the per-file WAVs into the final tape image. Generic — works for any number of same-format WAV segments. |
+| `verify_font_cache.py` | Runs the real `vz_boot` in a Z80 emulator with the ROM font poisoned and checks the tile cache against an independent conversion of the corrected font table. |
 
-**Generated, not checked in as source** (produced by the Makefile — listed here so the names are recognizable if you see them on disk): `ghost13_vz.asm`, `stage1.bin`/`.vz`/`.wav`, `ghost13_vz.bin`/`.vz`/`.wav`, `ghost13_two_stage.wav`, `*.sym`, `*.o`.
+**Generated, not checked in as source** (produced by the Makefile — listed here so the names are recognizable if you see them on disk): `stage1.bin`/`.vz`/`.wav`, `ghost13_p*.bin`/`.vz`/`.wav`, `ghost13_hal.*`, `ghost13_ram.bin`, `ghost13_two_stage.wav`, `*.o`.
 
 ## Documentation
 
@@ -56,7 +75,7 @@ for this source.
 | `REAUDIT_v2.md` | The `0x7800` → `0x7AE8` relocation (ROM workspace collision + the CLOAD self-corruption bug it caused), the leftover-ROM-call reachability triage, and the toolchain verification (real `z88dk-z80asm`/`vzpack`/`vz2wav` vs. the `pasmo` stand-in). |
 | `STAGE1_NOTES.md` | The bank 1 / bank 2 memory-aliasing hazard (from the RC39 `memory_map.md`), why the two-stage load fixes it, and the ROM-code-level emulator verification (all 8 boot-time bank states, real `TAPE_LOAD_COMMON`). |
 | `PROGRESS.md` | Overall project log through the v2/v3 relocation and re-audit work. **Predates** the bank-aliasing fix and the font-cache work below — treat `STAGE1_NOTES.md` and this README as the more current sources for anything that conflicts. |
-| `texmode-issues.md` | Your own doc on the text-mode/HUD rendering gap (semigraphics-only blitter drops ordinary text) and the `PRN_GFX_FONT` tile-cache plan. The cache itself (`vz_build_font_cache` etc.) is implemented in `port_13ghosts_v4.py`'s HAL section and emulator-verified against that plan; the actual HUD *renderer* described in this doc's later sections is still open. |
+| `texmode-issues.md` | Your own doc on the text-mode/HUD rendering gap (semigraphics-only blitter drops ordinary text) and the `PRN_GFX_FONT` tile-cache plan. The cache itself (`vz_build_font_cache` etc.) is implemented in `hal_vz.asm` and emulator-verified against that plan; the actual HUD *renderer* described in this doc's later sections is still open. |
 
 ## Reference material (not part of this repo — inputs from elsewhere)
 
@@ -65,9 +84,41 @@ for this source.
 - `vz2wav-decompile-main/` (your repo) — source for `vzpack`/`vz2wav`/`wav2vz`. `dist/linux.zip` has working prebuilt x86-64 binaries despite the `ia64-linux` directory name.
 - `z88dk-master.zip` — source for `z88dk-z80asm`. Needs 4 git submodules (`uthash`, `optparse`, `regex`, `UNIXem`) that a plain GitHub zip download doesn't include.
 
----
+## What the patcher changes (and how to check it)
+
+`python3 port_13ghosts_v8.py` prints every patched site with the original and
+new bytes; each patch is asserted against the expected original bytes, the
+untouched game bytes are checked identical to the original, and every moved
+screen is decompressed from its new address and compared with the original
+decode.  Patches: 5 video-RAM copies (`3C00h`), 5 keyboard reads (`3840h`,
+`3804h`, and the any-key poll at `C9FD`), 4 sound `out` instructions plus the 4
+stores that used to poke the port number into them, the TRSDOS high-score
+read/write bypasses, and the screen-table builder (`C750`).
+
+Fixes this design made unnecessary or that were found along the way:
+
+* the VZ200 ROM font table has 17 bad bytes in 10 glyphs; the corrected table
+  (`VZ200_basic_ROM_listing/corrected_table.asm`) is built into `hal_vz.asm`
+  and the 1 KB tile cache at `F400h` is made from it (`verify_font_cache.py`);
+* the first port inverted the sense of the any-key poll (`vz_check_fire`), which
+  turned every wait-for-key loop inside out; it now returns NZ when any key
+  is down, like the original;
+* the original `push bc` before the video copy at `5577h` has to be kept
+  (`vz_blit_site1`), because `5583h` pops it again.
+
+Memory map after loading, original addresses unless noted: `4000` stub,
+`4050-51FF` screens C, `5200-644A` game, `644B-67FF` screens A, `6800-77FF` VZ200
+I/O + video RAM, `7AE8` stub, `7AF0-886B` screens B, `886C-CA05` game,
+`CA12-E411` game buffers/table (runtime), `E420` replacement routines, `F400`
+tile cache, stack from `FFFF`.
+
+Not covered: the high-score name entry reads/writes the TRS-80 video RAM at
+`3Exx/3Fxx` directly (not patched), and the TRSDOS high-score file is not
+saved.  Real hardware has not been tried.
 
 ## Superseded — moved to `archive/`
+
+`port_13ghosts_v7.py` (the last relocating version) and older scripts are kept for reference only.
 
 Kept only as a record of how the design evolved; the `Makefile` doesn't
 reference any of these, and each was replaced for a specific,

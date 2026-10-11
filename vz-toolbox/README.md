@@ -54,11 +54,8 @@ cd 13-ghosts-vz-test && md5sum -c /path/to/vz-toolbox/selftest/expected_13ghosts
 Harmless noise: "modification time in the future" / "Clock skew detected" if the
 project files came from a zip with odd timestamps.
 
-## What this does NOT verify
-
-Byte-identical output proves the pipeline is reproducible. It does not prove the
-tape loads on an RC39/VZ200 or that the game runs; that needs real hardware or
-an emulator.
+## emulator needs to be built 
+./build.sh should do the trick - you may just need the dev kit dependancies. 
 
 ## Provenance / licenses
 

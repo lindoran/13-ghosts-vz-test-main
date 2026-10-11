@@ -1,3 +1,7 @@
+> **SUPERSEDED BY v8** - this document describes the relocated (0x7AE8) layout of v1-v7.
+> The current design keeps the original addresses; see README.md and the
+> docstring of `port_13ghosts_v8.py`.  Kept for the TRS-80 background it contains.
+
 # 13 Ghosts (1982, Software Affair / Radio Shack) — Disassembly Notes
 
 Source: `13_Ghosts__1982__Software_Affair-Tandy__CMD_.zip`, containing
