@@ -49,6 +49,8 @@ import sys
 SRC_ASM = "ghost13b.asm"                                   # z80dasm listing of the TRS-80 binary
 FONT_SRC = os.path.join("font-asset-research", "font_3x5.asm")
 HAL_SRC = "hal_vz.asm"
+ASSETS_DIR = "assets"
+PROD_DIR = "prod"
 
 ORIG_LO, ORIG_HI = 0x5200, 0xCA05
 CODE_RANGES = [(0x535A, 0x60A8), (0xC587, 0xCA05)]         # real code; the rest is data
@@ -281,29 +283,34 @@ def assemble_hal(screen_entries, extra_blob):
     lst.append("\tdefw\t0FFFFh")
     src = f"\torg\t0{HAL_BASE:04X}h\n" + "\n".join(equ) + "\n" + open(HAL_SRC).read() + "\n" + load_corrected_font() \
         + "\n".join(lst) + "\nvz_hal_end:\n"
-    open("ghost13_hal.asm", "w").write(src)
+    asm_path = os.path.join(ASSETS_DIR, "ghost13_hal.asm")
+    open(asm_path, "w").write(src)
     asm = shutil.which("z88dk-z80asm")
     if not asm:
         raise SystemExit("z88dk-z80asm not found (install z88dk, or source vz-toolbox/env.sh)")
     for f in ("ghost13_hal.bin", "ghost13_hal.map", "ghost13_hal.o"):
+        f = os.path.join(ASSETS_DIR, f)
         if os.path.exists(f):
             os.remove(f)
-    res = subprocess.run([asm, "-b", "-m", "ghost13_hal.asm"], capture_output=True, text=True)
-    if res.returncode != 0 or not os.path.exists("ghost13_hal.bin"):
+    res = subprocess.run([asm, "-b", "-m", asm_path], capture_output=True, text=True)
+    bin_path = os.path.join(ASSETS_DIR, "ghost13_hal.bin")
+    if res.returncode != 0 or not os.path.exists(bin_path):
         raise SystemExit("assembling ghost13_hal.asm failed:\n" + res.stdout + res.stderr)
-    code = open("ghost13_hal.bin", "rb").read()
+    code = open(bin_path, "rb").read()
     syms = {}
-    for m in re.finditer(r"^(\w+)\s+= \$([0-9A-F]+)", open("ghost13_hal.map").read(), re.M):
+    with open(os.path.join(ASSETS_DIR, "ghost13_hal.map")) as map_file:
+        map_text = map_file.read()
+    for m in re.finditer(r"^(\w+)\s+= \$([0-9A-F]+)", map_text, re.M):
         syms[m.group(1)] = int(m.group(2), 16)
     return code, syms
 
 
 # ------------------------------------------------------------------ packing .vz
-def write_vz(path, name, start, data):
-    base = path[:-3]
-    open(base + ".bin", "wb").write(data)
+def write_vz(path, bin_path, name, start, data):
+    with open(bin_path, "wb") as binary_file:
+        binary_file.write(data)
     if VZPACK and os.path.exists(VZPACK):
-        r = subprocess.run([VZPACK, "--in-bin", base + ".bin", "-s", hex(start), "-o", path, "-t", "mc", "-n", name],
+        r = subprocess.run([VZPACK, "--in-bin", bin_path, "-s", hex(start), "-o", path, "-t", "mc", "-n", name],
                            capture_output=True, text=True)
         if r.returncode == 0:
             return
@@ -313,6 +320,8 @@ def write_vz(path, name, start, data):
 
 
 def main():
+    os.makedirs(ASSETS_DIR, exist_ok=True)
+    os.makedirs(PROD_DIR, exist_ok=True)
     orig = recon_original()
     pristine = bytes(orig)
     print(f"original image rebuilt from {SRC_ASM}: {len(orig)} bytes at {ORIG_LO:04X}-{ORIG_HI:04X}")
@@ -406,13 +415,19 @@ def main():
     assert set(diff) == {ORIG_LO + i for i in changed if ORIG_LO + i < 0x644B or ORIG_LO + i >= 0x886C}, \
         "unexpected differences from the original"
 
-    write_vz("ghost13_p1.vz", "13GHOSTS1", 0x4000, bytes(f1))
-    write_vz("ghost13_p2.vz", "13GHOSTS2", 0x7AE8, bytes(f2))
-    write_vz("ghost13_p3.vz", "13GHOSTS3", HAL_BASE, bytes(f3))
-    for p in ("ghost13_p1.vz", "ghost13_p2.vz", "ghost13_p3.vz"):
+    write_vz(os.path.join(PROD_DIR, "ghost13_p1.vz"),
+             os.path.join(ASSETS_DIR, "ghost13_p1.bin"), "13GHOSTS1", 0x4000, bytes(f1))
+    write_vz(os.path.join(PROD_DIR, "ghost13_p2.vz"),
+             os.path.join(ASSETS_DIR, "ghost13_p2.bin"), "13GHOSTS2", 0x7AE8, bytes(f2))
+    write_vz(os.path.join(PROD_DIR, "ghost13_p3.vz"),
+             os.path.join(ASSETS_DIR, "ghost13_p3.bin"), "13GHOSTS3", HAL_BASE, bytes(f3))
+    for p in (os.path.join(PROD_DIR, "ghost13_p1.vz"),
+              os.path.join(PROD_DIR, "ghost13_p2.vz"),
+              os.path.join(PROD_DIR, "ghost13_p3.vz")):
         print(f"wrote {p} ({os.path.getsize(p)} bytes)")
     # a flat 64K memory image for emulator / test use
-    open("ghost13_ram.bin", "wb").write(bytes(mem))
+    with open(os.path.join(ASSETS_DIR, "ghost13_ram.bin"), "wb") as ram_file:
+        ram_file.write(bytes(mem))
     return 0
 
 

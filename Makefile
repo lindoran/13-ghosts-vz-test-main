@@ -1,10 +1,11 @@
 # =============================================================================
 # Makefile for 13 Ghosts VZ200/RC39 port (v8) -- four-file tape, three encodings
+.DEFAULT_GOAL := all
 #
 #   make            all three tapes below
-#   make standard   ghost13_two_stage.wav   normal-speed ROM-format tape (the original)
-#   make fast       ghost13_fast.wav        fast loader, normal phase (stock VZ200, emulators)
-#   make fast-inv   ghost13_fast_inv.wav    fast loader, inverted phase (--fast-invert, for
+#   make standard   assets/ghost13_two_stage.wav   normal-speed ROM-format tape (the original)
+#   make fast       prod/ghost13_fast.wav          fast loader, normal phase (stock VZ200, emulators)
+#   make fast-inv   prod/ghost13_fast_inv.wav      fast loader, inverted phase (--fast-invert, for
 #                                           machines whose tape input inverts the signal,
 #                                           e.g. the RC39/HB200 homebrew)
 #
@@ -32,28 +33,33 @@ export VZPACK VZ2WAV ASM
 LOAD_ORG = 0x7AE8
 
 STAGE1_ASM = stage1.asm
-STAGE1_BIN = stage1.bin
-STAGE1_VZ  = stage1.vz
-STAGE1_WAV = stage1.wav
+ASSETS_DIR = assets
+PROD_DIR   = prod
+STAGE1_BIN = $(ASSETS_DIR)/stage1.bin
+STAGE1_VZ  = $(PROD_DIR)/stage1.vz
+STAGE1_WAV = $(ASSETS_DIR)/stage1.wav
 
 PORT_SCRIPT = port_13ghosts_v8.py
 PORT_DEPS   = $(PORT_SCRIPT) ghost13b.asm hal_vz.asm VZ200_basic_ROM_listing/corrected_table.asm
 PARTS       = ghost13_p1 ghost13_p2 ghost13_p3
-PART_VZ     = $(addsuffix .vz,$(PARTS))
-PART_WAV    = $(addsuffix .wav,$(PARTS))
+PART_VZ     = $(addprefix $(PROD_DIR)/,$(addsuffix .vz,$(PARTS)))
+PART_WAV    = $(addprefix $(ASSETS_DIR)/,$(addsuffix .wav,$(PARTS)))
 
-FINAL_WAV      = ghost13_two_stage.wav
-FAST_WAV       = ghost13_fast.wav
-FAST_INV_WAV   = ghost13_fast_inv.wav
+FINAL_WAV      = $(ASSETS_DIR)/ghost13_two_stage.wav
+FAST_WAV       = $(PROD_DIR)/ghost13_fast.wav
+FAST_INV_WAV   = $(PROD_DIR)/ghost13_fast_inv.wav
 
 # Fast encodings. --fast-vram is required for this game: parts 2 and 3 reach above 0xC000, which
 # the default receiver placement cannot reach; --fast-vram puts the receiver and its stack in
 # unused video RAM (0x7200-0x77FF), which the game never loads into.
 FAST_FLAGS     ?= --fast --fast-vram
-FAST_PART_WAV     = $(addsuffix _fast.wav,$(PARTS))
-FAST_INV_PART_WAV = $(addsuffix _fast_inv.wav,$(PARTS))
+FAST_PART_WAV     = $(addprefix $(ASSETS_DIR)/,$(addsuffix _fast.wav,$(PARTS)))
+FAST_INV_PART_WAV = $(addprefix $(ASSETS_DIR)/,$(addsuffix _fast_inv.wav,$(PARTS)))
 
 .PHONY: all standard fast fast-inv stage1 parts clean
+
+$(ASSETS_DIR) $(PROD_DIR):
+	mkdir -p $@
 
 all: $(FINAL_WAV) $(FAST_WAV) $(FAST_INV_WAV)
 
@@ -62,16 +68,17 @@ fast: $(FAST_WAV)
 fast-inv: $(FAST_INV_WAV)
 
 # ---- stage 1 ----
-$(STAGE1_BIN): $(STAGE1_ASM)
+$(STAGE1_BIN): $(STAGE1_ASM) | $(ASSETS_DIR)
 	@if command -v $(ASM) >/dev/null 2>&1; then \
 		echo "assembling stage1 with $(ASM)" ; \
-		$(ASM) -b $(STAGE1_ASM) ; \
+		$(ASM) -b -o$(STAGE1_BIN) $(STAGE1_ASM) || exit $$? ; \
+		if [ -f stage1.o ]; then mv -f stage1.o $(ASSETS_DIR)/stage1.o; fi ; \
 	else \
 		echo "$(ASM) not found; using pasmo instead" ; \
-		pasmo $(STAGE1_ASM) $(STAGE1_BIN) stage1.sym ; \
+		pasmo $(STAGE1_ASM) $(STAGE1_BIN) $(ASSETS_DIR)/stage1.sym ; \
 	fi
 
-$(STAGE1_VZ): $(STAGE1_BIN)
+$(STAGE1_VZ): $(STAGE1_BIN) | $(PROD_DIR)
 	$(VZPACK) --in-bin $(STAGE1_BIN) -s $(LOAD_ORG) -o $(STAGE1_VZ) -t mc -n STAGE1
 
 $(STAGE1_WAV): $(STAGE1_VZ)
@@ -80,22 +87,22 @@ $(STAGE1_WAV): $(STAGE1_VZ)
 stage1: $(STAGE1_WAV)
 
 # ---- the game: one script run produces all three .vz parts ----
-ghost13_parts.stamp: $(PORT_DEPS)
+$(ASSETS_DIR)/ghost13_parts.stamp: $(PORT_DEPS) | $(ASSETS_DIR) $(PROD_DIR)
 	$(PYTHON) $(PORT_SCRIPT)
 	@touch $@
 
-$(PART_VZ): ghost13_parts.stamp ;
+$(PART_VZ): $(ASSETS_DIR)/ghost13_parts.stamp ;
 
 # normal-speed part audio (ghost13_p1.wav ...)
-%.wav: %.vz
+$(ASSETS_DIR)/%.wav: $(PROD_DIR)/%.vz | $(ASSETS_DIR)
 	$(VZ2WAV) $< $@
 
 # fast-loader part audio, normal phase (ghost13_p1_fast.wav ...)
-%_fast.wav: %.vz
+$(ASSETS_DIR)/%_fast.wav: $(PROD_DIR)/%.vz | $(ASSETS_DIR)
 	$(VZ2WAV) $(FAST_FLAGS) --fast-normal $< $@
 
 # fast-loader part audio, inverted phase (ghost13_p1_fast_inv.wav ...)
-%_fast_inv.wav: %.vz
+$(ASSETS_DIR)/%_fast_inv.wav: $(PROD_DIR)/%.vz | $(ASSETS_DIR)
 	$(VZ2WAV) $(FAST_FLAGS) --fast-invert $< $@
 
 parts: $(PART_VZ)
@@ -112,7 +119,18 @@ $(FAST_INV_WAV): $(STAGE1_WAV) $(FAST_INV_PART_WAV)
 	$(PYTHON) splice_wav.py $(STAGE1_WAV) $(FAST_INV_PART_WAV) $(FAST_INV_WAV)
 
 clean:
-	rm -f stage1.bin stage1.vz stage1.wav stage1.o ghost13_p*.bin ghost13_p*.vz ghost13_p*.wav \
-	      ghost13_parts.stamp ghost13_hal.asm ghost13_hal.bin ghost13_hal.map ghost13_hal.o \
-	      ghost13_ram.bin $(FINAL_WAV) $(FAST_WAV) $(FAST_INV_WAV) \
+	rm -f $(ASSETS_DIR)/stage1.bin $(ASSETS_DIR)/stage1.vz $(ASSETS_DIR)/stage1.wav \
+	      $(ASSETS_DIR)/stage1.o $(ASSETS_DIR)/stage1.sym \
+	      $(ASSETS_DIR)/ghost13_p*.bin $(ASSETS_DIR)/ghost13_p*.wav \
+	      $(ASSETS_DIR)/ghost13_parts.stamp $(ASSETS_DIR)/ghost13_hal.asm \
+	      $(ASSETS_DIR)/ghost13_hal.bin $(ASSETS_DIR)/ghost13_hal.map \
+	      $(ASSETS_DIR)/ghost13_hal.o $(ASSETS_DIR)/ghost13_ram.bin \
+	      $(ASSETS_DIR)/ghost13_two_stage.wav \
+	      $(ASSETS_DIR)/ghost13_p*_fast.wav $(ASSETS_DIR)/ghost13_p*_fast_inv.wav \
+	      $(PROD_DIR)/stage1.vz $(PROD_DIR)/ghost13_p*.vz \
+	      $(PROD_DIR)/ghost13_fast.wav $(PROD_DIR)/ghost13_fast_inv.wav \
+	      stage1.bin stage1.vz stage1.wav stage1.o stage1.sym ghost13_p*.bin \
+	      ghost13_p*.vz ghost13_p*.wav ghost13_parts.stamp ghost13_hal.asm \
+	      ghost13_hal.bin ghost13_hal.map ghost13_hal.o ghost13_ram.bin \
+	      ghost13_two_stage.wav ghost13_fast.wav ghost13_fast_inv.wav \
 	      ghost13_p*_fast.wav ghost13_p*_fast_inv.wav

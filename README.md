@@ -44,15 +44,19 @@ Produces three tapes, all with the same stage 1 and the same three parts:
 
 | Target | File | Use |
 |---|---|---|
-| `make standard` | `ghost13_two_stage.wav` | normal-speed ROM-format tape (~476 s) |
-| `make fast` | `ghost13_fast.wav` | fast loader, normal phase: stock VZ200 and emulators (~103 s) |
-| `make fast-inv` | `ghost13_fast_inv.wav` | fast loader, inverted phase (`--fast-invert`): machines whose tape input inverts the signal, e.g. the RC39/HB200 homebrew (~103 s) |
+| `make standard` | `assets/ghost13_two_stage.wav` | normal-speed ROM-format tape (~476 s) |
+| `make fast` | `prod/ghost13_fast.wav` | fast loader, normal phase: stock VZ200 and emulators (~103 s) |
+| `make fast-inv` | `prod/ghost13_fast_inv.wav` | fast loader, inverted phase (`--fast-invert`): machines whose tape input inverts the signal, e.g. the RC39/HB200 homebrew (~103 s) |
 
 Plain `make` builds all three. The fast tapes encode each part with
 `vz2wav --fast --fast-vram` (`--fast-vram` is required here: parts 2 and 3 reach
 above `0xC000`; override with `FAST_FLAGS=`). They need vz2wav 2.3 or later,
 where the normal phase is the default. `make stage1` / `make parts` build
-just one side; `make clean` removes all generated output. `VZPACK`/`VZ2WAV`
+just one side. The emulator-ready part files (`.vz`) and the two distributable
+fast tapes and all `.vz` emulator inputs (including the stage-one loader) are
+in `prod/`; intermediate files and the standard-speed tape are in `assets/`.
+`make clean` removes generated files from both locations and
+cleans legacy root-level build outputs. `VZPACK`/`VZ2WAV`
 default to the paths in the `Makefile`; override them if yours live
 elsewhere.
 
@@ -84,16 +88,16 @@ so it can no longer mute the game by accident. The extra direction keys (`X`, `Z
 |---|---|
 | `cmd_tools.py` | Parses TRS-80 TRSDOS `.cmd` load-module format, reassembles a flat memory image. Standalone; not part of the VZ200 build itself, but what originally produced `ghost13b.asm`'s source bytes. |
 | `ghost13b.asm` | Full `z80dasm` disassembly of the original TRS-80 game (the un-protection-patched variant — see `PORTING_NOTES.md`). v8 uses it only to **recover the original bytes** (from its `;addr<TAB>bytes` comments); its instruction text is no longer assembled. |
-| `port_13ghosts_v8.py` | **Current** porting script (patch in place; see above). Writes `ghost13_p1/p2/p3.vz` (+ `.bin`), `ghost13_hal.asm/.map`, and `ghost13_ram.bin` (flat 64K image of everything loaded, for emulator tests). |
+| `port_13ghosts_v8.py` | **Current** porting script (patch in place; see above). Writes `prod/ghost13_p1/p2/p3.vz` for emulator tests, plus intermediate `.bin` files, `ghost13_hal.asm/.map`, and `ghost13_ram.bin` under `assets/`. |
 | `hal_vz.asm` | The VZ200/RC39 replacement routines the patched game calls: boot, screen-table fill, video blit + HUD, keyboard, sound, font tile cache. |
 | `stage1.asm` | The bootstrap (12 bytes): bank 0 + RAM in the 4000-67FF window, then call the ROM's `TAPE_LOAD_COMMON` to load the next file. |
-| `Makefile` | The build chain. `make` → `ghost13_two_stage.wav`, `ghost13_fast.wav`, `ghost13_fast_inv.wav` (stage1 + 3 parts each). |
+| `Makefile` | The build chain. `make` → `assets/ghost13_two_stage.wav`, `prod/ghost13_fast.wav`, and `prod/ghost13_fast_inv.wav` (stage1 + 3 parts each). |
 | `splice_wav.py` | Concatenates the per-file WAVs into the final tape image. Generic — works for any number of same-format WAV segments. |
 | `gen_blit.py` | Regenerates the `vz_blit_frame` / `vz_build_blit_tables` block in `hal_vz.asm` (table-driven, 32-pair unrolled, ~22 ms/frame). Edit the generator, not the generated block. |
 | `verify_blit.py` | Runs the new blit and a baseline build's original bit-twiddling blit on identical buffers in the Z80 emulator and compares VRAM byte for byte. Usage: `verify_blit.py [BASELINE_DIR]` (dir holding the old `ghost13_ram.bin` + `ghost13_hal.map`). |
 | `verify_font_cache.py` | Runs the real `vz_boot` in a Z80 emulator with the ROM font poisoned and checks the tile cache against an independent conversion of the corrected font table. |
 
-**Generated, not checked in as source** (produced by the Makefile — listed here so the names are recognizable if you see them on disk): `stage1.bin`/`.vz`/`.wav`, `ghost13_p*.bin`/`.vz`/`.wav`, `ghost13_hal.*`, `ghost13_ram.bin`, `ghost13_two_stage.wav`, `ghost13_fast.wav`, `ghost13_fast_inv.wav`, `ghost13_p*_fast*.wav`, `*.o`.
+**Generated, not checked in as source**: the Makefile keeps intermediate files in `assets/` (stage-one `.bin`/`.wav`, part `.bin`/`.wav`, HAL assembler outputs, RAM image, stamp, and fast/standard audio segments). `prod/` contains all `.vz` files and the distributable `ghost13_fast.wav` / `ghost13_fast_inv.wav`. Both directories are ignored by Git.
 
 ## Documentation
 
