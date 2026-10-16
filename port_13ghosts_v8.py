@@ -47,7 +47,7 @@ import subprocess
 import sys
 
 SRC_ASM = "ghost13b.asm"                                   # z80dasm listing of the TRS-80 binary
-FONT_SRC = os.path.join("VZ200_basic_ROM_listing", "corrected_table.asm")
+FONT_SRC = os.path.join("font-asset-research", "font_3x5.asm")
 HAL_SRC = "hal_vz.asm"
 
 ORIG_LO, ORIG_HI = 0x5200, 0xCA05
@@ -55,11 +55,13 @@ CODE_RANGES = [(0x535A, 0x60A8), (0xC587, 0xCA05)]         # real code; the rest
 GAME_ENTRY = 0x535A
 
 HAL_BASE = 0xE420
-TILE_CACHE = 0xF400
+FONT3_CACHE = 0xF400            # 3x5 HUD font, 64 glyphs x 5 bytes = 320 bytes (runtime)
+TILE_CACHE = FONT3_CACHE
 SCREEN_TABLE = 0xE212
 SND_ENABLE = 0xC80B
-HUD_SCORE, HUD_LEVEL10, HUD_LEVEL1 = 0xDDDE, 0xDE04, 0xDE05    # buffer 4 row 15 + field offsets
+HUD_SCORE, HUD_LEVEL10, HUD_LEVEL1 = 0xDDDA, 0xDE04, 0xDE05    # buffer 4 row 15 (0xDDD2) + col 8 / 50 / 51; score field = cols 8-16
 HUD_GHOST10, HUD_GHOST1 = 0xDE0F, 0xDE10
+HUD_LEVELNAME = 0xDDE8          # 17-char level-name field, HUD row cols 22-38
 
 BUILDER_START = 0x644A          # `ld hl,l644ah` in the original table builder (0xC753)
 
@@ -215,6 +217,8 @@ def build_patches():
         "buffer 4 -> screen, plus HUD; keeps the original push bc")
     for a in (0x5A7E, 0x5AFD, 0x602A, 0x607B):
         add(a, bytes.fromhex("11 00 3c 01 00 04 ed b0"), call("vz_blit_frame"), "buffer -> screen")
+    # --- title credits: the final static draw of the title screen (after the slide-in)
+    add(0x5396, bytes.fromhex("cd 12 60"), call("vz_title_draw"), "title: draw the screen, then the 3x5 credits")
     # --- keyboard
     for a in (0x5404, 0x54E5, 0x5DBC, 0x5F27):
         add(a, bytes.fromhex("3a 40 38"), call("vz_read_kbd_3840"), "TRS-80 keyboard row 0x3840")
@@ -250,24 +254,26 @@ def apply_patches(img, patches):
 
 # ------------------------------------------------------------------ HAL assembly
 def load_corrected_font():
+    """Emit the packed 3x5 HUD font (64 glyphs x 2 bytes) from font-asset-research/font_3x5.asm."""
     txt = open(FONT_SRC).read()
-    rows = re.findall(r"DEFB\s+((?:0x[0-9A-Fa-f]{2},?){5})", txt)
+    rows = re.findall(r"DEFB\s+0x([0-9A-Fa-f]{2}),0x([0-9A-Fa-f]{2})\s*;\s*ordinal", txt)
     if len(rows) != 64:
-        raise SystemExit(f"{FONT_SRC}: expected 64 glyph rows, found {len(rows)}")
-    out = ["; Corrected PRN_GFX_FONT, 64 glyphs x 5 column bytes (active-low).",
-           "; Generated from corrected_table.asm -- do not hand-edit.", "vz_font_src:"]
-    for i, r in enumerate(rows):
-        out.append("\tdefb\t" + ",".join(f"0{b[2:].upper()}h" for b in r.split(",")) + f"\t\t; glyph {i:02X}")
-    out.append("vz_font_src_end:")
+        raise SystemExit(f"{FONT_SRC}: expected 64 glyphs, found {len(rows)}")
+    out = ["; 3x5 HUD font, 64 glyphs x 2 bytes (15 pixels row-major, bit 14 = top-left).",
+           "; Generated from font-asset-research/font_3x5.asm -- do not hand-edit.", "vz_font3_src:"]
+    for i, (hi, lo) in enumerate(rows):
+        out.append(f"\tdefb\t0{hi.upper()}h,0{lo.upper()}h\t\t; glyph {i:02X}")
+    out.append("vz_font3_src_end:")
     return "\n".join(out) + "\n"
 
 
 def assemble_hal(screen_entries, extra_blob):
-    equ = [f"HAL_BASE EQU 0{HAL_BASE:04X}h", f"TILE_CACHE EQU 0{TILE_CACHE:04X}h",
+    equ = [f"HAL_BASE EQU 0{HAL_BASE:04X}h", f"FONT3_CACHE EQU 0{FONT3_CACHE:04X}h",
            f"SCREEN_TABLE EQU 0{SCREEN_TABLE:04X}h", f"GAME_ENTRY EQU 0{GAME_ENTRY:04X}h",
            f"SND_ENABLE EQU 0{SND_ENABLE:04X}h", f"HUD_SCORE EQU 0{HUD_SCORE:04X}h",
            f"HUD_LEVEL10 EQU 0{HUD_LEVEL10:04X}h", f"HUD_LEVEL1 EQU 0{HUD_LEVEL1:04X}h",
-           f"HUD_GHOST10 EQU 0{HUD_GHOST10:04X}h", f"HUD_GHOST1 EQU 0{HUD_GHOST1:04X}h"]
+           f"HUD_GHOST10 EQU 0{HUD_GHOST10:04X}h", f"HUD_GHOST1 EQU 0{HUD_GHOST1:04X}h",
+           f"HUD_LEVELNAME EQU 0{HUD_LEVELNAME:04X}h"]
     lst = ["", "; compressed-screen list: screen index, address of its stream (after the 04 marker)",
            "vz_screen_list:"]
     for idx, ptr in screen_entries:

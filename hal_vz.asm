@@ -28,7 +28,7 @@ vz_boot:
 	ldir
 
 	ld	sp, 0ffffh		; same stack the original sets
-	call	vz_build_font_cache
+	call	vz_build_font3
 	call	vz_build_blit_tables
 	jp	GAME_ENTRY
 
@@ -312,6 +312,9 @@ vz_blit_frame:
 	push	de
 	push	hl
 	push	ix
+	ld	a, (vz_cred_on)		; title credits still in the bottom margin?
+	or	a
+	call	nz, vz_cred_clear	; (preserves HL; BC/DE/A are reloaded below)
 	ld	b, h
 	ld	c, l			; BC = source
 	ld	ix, 07100h		; first playfield scanline
@@ -1006,278 +1009,242 @@ vbp2:
 	ret
 ; ==== END GENERATED BLIT ====
 
+
 ; ---------------------------------------------------------------------------
-; vz_draw_glyph: draws one cached 8x8 font tile to VRAM.
-; In: A = char code (0-63, i.e. ascii AND 0x3Fh), DE = dest VRAM address
-;     (top-left byte of the 8x8 cell; must be byte-aligned, i.e. an even
-;     x-pixel boundary).
-; Destroys AF, BC, HL. DE is preserved (walked forward internally to
-; write all 8 rows, then restored) -- safe for a caller to reuse DE
-; immediately after the call without reloading it.
+; 3x5 HUD font (font-asset-research/font_3x5.asm, CC0, A. Earfalas).
 ;
-; Verified in a Z80 emulator against the real ROM font, rendering to a
-; decoded PNG for visual inspection ("HUD OK" test) -- caught a real bug
-; this way (missing the second INC DE per row, which silently shifted
-; every row after the first one byte early) before this was wired in.
-; A second bug (DE not preserved, silently corrupting any caller that
-; assumed it was) was caught the same way testing vz_draw_hud_row and
-; fixed here rather than patched around at each call site.
+; A glyph is 3 pixels of ink + 1 blank pixel = 4 pixels = exactly ONE byte in
+; Mode 1 (2 bits/pixel), so every glyph row is one byte and every cell is
+; byte-aligned: no shifting, 32 cells per 128-pixel line.  Cell pitch is 4x6.
+;
+; vz_font3_src holds 64 glyphs packed 15 bits in 2 bytes (see the generated
+; table at the end of this file).  vz_build_font3 expands them at boot into
+; FONT3_CACHE: 64 glyphs x 5 bytes (one byte per glyph row, ink = pixel value
+; 3, left pixel in bits 7-6, 4th pixel blank) = 320 bytes.
+;
+; Character index = ASCII & 3Fh after upper-casing: 20h-3Fh -> 20h-3Fh
+; (space, digits, punctuation), 40h-5Fh -> 00h-1Fh (@, A-Z, ...).
 ; ---------------------------------------------------------------------------
-vz_draw_glyph:
-	push	af
+vz_build_font3:
+	ld	hl, vz_font3_src
+	ld	ix, FONT3_CACHE
+	ld	a, 64
+	ld	(f3_cnt), a
+f3_glyph:
+	ld	b, (hl)			; BC = 15-bit glyph, row 0 in bits 14-12
+	inc	hl
+	ld	c, (hl)
+	inc	hl
+	push	hl
+	call	f3_next
+	ld	(ix+4), a		; bits 2-0   = row 4
+	call	f3_next
+	ld	(ix+3), a
+	call	f3_next
+	ld	(ix+2), a
+	call	f3_next
+	ld	(ix+1), a
+	call	f3_next
+	ld	(ix+0), a		; bits 14-12 = row 0
+	ld	de, 5
+	add	ix, de
+	pop	hl
+	ld	a, (f3_cnt)
+	dec	a
+	ld	(f3_cnt), a
+	jr	nz, f3_glyph
+	ret
+
+; f3_next: A = Mode 1 byte for the low 3 bits of BC (bit 2 = left pixel),
+; then BC >>= 3.  Destroys DE, HL.
+f3_next:
+	ld	a, c
+	and	7
+	ld	e, a
+	ld	d, 0
+	ld	hl, f3_exp
+	add	hl, de
+	ld	a, (hl)
+	srl	b
+	rr	c
+	srl	b
+	rr	c
+	srl	b
+	rr	c
+	ret
+
+f3_exp:	defb	000h, 00ch, 030h, 03ch, 0c0h, 0cch, 0f0h, 0fch	; 3 pixels -> byte
+f3_cnt:	defb	0
+
+; ---------------------------------------------------------------------------
+; vz_draw3: draw one 3x5 glyph.
+; In:  A = TRS-80 screen character (lower case is upper-cased), DE = VRAM
+;      address of the cell's first scanline byte.
+; Out: DE = address of the next cell (DE+1).  Preserves AF? no: destroys AF;
+;      preserves BC, HL.  Writes 5 bytes, 32 apart.
+; ---------------------------------------------------------------------------
+vz_draw3:
+	push	hl
 	push	bc
-	push	de
-	ld	h, 0
+	cp	060h
+	jr	c, v3_up
+	sub	020h			; a-z -> A-Z
+v3_up:
+	and	03fh
 	ld	l, a
+	ld	h, 0
+	ld	c, l
+	ld	b, h
 	add	hl, hl
 	add	hl, hl
-	add	hl, hl
-	add	hl, hl		; hl = char_code * 16
-	ld	bc, TILE_CACHE		; FONT_TILE_CACHE
+	add	hl, bc			; HL = index * 5
+	ld	bc, FONT3_CACHE
 	add	hl, bc
-	ld	b, 8
-vdg_row_loop:
+	push	de
+	ld	b, 5
+v3_row:
 	ld	a, (hl)
 	ld	(de), a
 	inc	hl
-	inc	de
-	ld	a, (hl)
-	ld	(de), a
-	inc	hl
-	inc	de
-	push	af
 	ld	a, e
-	add	a, 30
+	add	a, 32
 	ld	e, a
 	ld	a, d
 	adc	a, 0
 	ld	d, a
-	pop	af
-	djnz	vdg_row_loop
-	pop	de		; discard the walked value, restore caller's original DE
+	djnz	v3_row
+	pop	de
+	inc	de
 	pop	bc
-	pop	af
+	pop	hl
 	ret
 
+; vz_puts3: draw a zero-terminated string.  HL = string, DE = first cell.
+; Out: DE = next cell.  Destroys AF, HL.
+vz_puts3:
+	ld	a, (hl)
+	or	a
+	ret	z
+	inc	hl
+	call	vz_draw3
+	jr	vz_puts3
+
 ; ---------------------------------------------------------------------------
-; vz_draw_hud_row: renders a compact summary of the one-row HUD (buffer 4
-; row 15, VZ 0x53C0-0x53FF -- see HUD_FIELDS.md) into the bottom VZ margin
-; (0x7700-0x771F). Called once per frame from render site 1, right after
-; vz_blit_frame blits buffer 4 -- this is the only site confirmed to be
-; the live gameplay HUD (sites 2-4 blit buffer 0 for title/announcement
-; screens; site 5 is an unrelated transition effect).
+; vz_draw_hud_row: two-line HUD, called once per frame from render site 1 right after
+; vz_blit_frame.  Ink rows are 57-61 (one blank scanline above, two below);
+; cell 0 and cell 31 stay blank as side margins.
 ;
-; 8px/cell (Option A), 16 cells available, 14 used:
-;   cell:   0    1-5        6   7    8-9      10   11   12-13
-;   text: 'S'  score(5)   sp  'L'  level(2)  sp  'G'  ghost(2)
-; Score is the last 5 of the source field's 9 chars (right-justified,
-; space-padded, ones digit fixed at the end -- taking the last 5 keeps
-; that alignment and just caps displayable width at 99999).
+;   Top margin (VZ rows 0-7, ink rows 2-6): the game's 17-character level-name
+;   field (HUD row cols 22-38: "13 GHOSTS", "Dead of Night", ...) exactly as
+;   the game holds it -- it is already space-padded/centred -- in cells 7-23.
+;   No label.  Lower case is upper-cased by vz_draw3.
 ;
+;   Bottom margin (VZ rows 56-63, 0x7700-0x77FF), ink rows 57-61:
+;   cell: 1     6 7-15       16     22 23-24    25  28 29-30
+;   text: SCORE_ ddddddddd   _LEVEL_ dd       _GH_  dd              (30 cells)
+;
+; Score = the game's whole 9-character score field (template cols 8-16, space
+; padded; the ones digit is never incremented, so it is always 0).  The game's
+; carry stops at col 7 (the ':' of "Score:", which would become ';') -- outside
+; the field, only reachable past 999,999,999.
 ; Destroys AF, BC, DE, HL.
 ; ---------------------------------------------------------------------------
+HUD_ROW_ADDR EQU 07721h		; row 57, cell 1
+HUD_NAME_ADDR EQU 07047h		; row 2, cell 7 (17 cells: 7-23)
+
 vz_draw_hud_row:
-	ld	de, 07700h
-	ld	a, 013h		; 'S'
-	call	vz_draw_glyph
-	ld	hl, HUD_SCORE		; score field, last 5 chars (row cols 12-16)
-	ld	de, 07702h
-	ld	b, 5
-vhr_score_loop:
+	ld	de, HUD_NAME_ADDR	; top margin: level-name string only, no label
+	ld	hl, HUD_LEVELNAME
+	ld	b, 17
+vhr_name:
 	ld	a, (hl)
-	and	03fh
-	push	hl
-	push	bc
-	call	vz_draw_glyph	; DE is preserved by vz_draw_glyph itself
-	pop	bc
-	pop	hl
 	inc	hl
-	ld	a, e
-	add	a, 2
-	ld	e, a
-	ld	a, d
-	adc	a, 0
-	ld	d, a
-	djnz	vhr_score_loop
-	; de is now 0770ch (cell 6) -- leave it blank as a separator
-	ld	de, 0770eh		; cell 7
-	ld	a, 00ch		; 'L'
-	call	vz_draw_glyph
-	ld	de, 07710h		; cell 8
-	ld	a, (HUD_LEVEL10)		; level tens digit
-	and	03fh
-	call	vz_draw_glyph
-	ld	de, 07712h		; cell 9
-	ld	a, (HUD_LEVEL1)		; level ones digit
-	and	03fh
-	call	vz_draw_glyph
-	; cell 10 left blank as a separator
-	ld	de, 07716h		; cell 11
-	ld	a, 007h		; 'G'
-	call	vz_draw_glyph
-	ld	de, 07718h		; cell 12
-	ld	a, (HUD_GHOST10)		; ghost tens digit
-	and	03fh
-	call	vz_draw_glyph
-	ld	de, 0771ah		; cell 13
-	ld	a, (HUD_GHOST1)		; ghost ones digit
-	and	03fh
-	call	vz_draw_glyph
-	ret
+	call	vz_draw3
+	djnz	vhr_name
+	ld	de, HUD_ROW_ADDR
+	ld	hl, hud_s_score
+	call	vz_puts3
+	ld	hl, HUD_SCORE
+	ld	b, 9
+vhr_score:
+	ld	a, (hl)
+	inc	hl
+	call	vz_draw3
+	djnz	vhr_score
+	ld	hl, hud_s_level
+	call	vz_puts3
+	ld	a, (HUD_LEVEL10)
+	call	vz_draw3
+	ld	a, (HUD_LEVEL1)
+	call	vz_draw3
+	ld	hl, hud_s_ghosts
+	call	vz_puts3
+	ld	a, (HUD_GHOST10)
+	call	vz_draw3
+	ld	a, (HUD_GHOST1)
+	jp	vz_draw3
+
+hud_s_score:	defm	"SCORE ", 0
+hud_s_level:	defm	" LEVEL ", 0
+hud_s_ghosts:	defm	" GH ", 0
 
 ; ---------------------------------------------------------------------------
-; Text-mode font cache (see texmode-issues.md).
-;
-; Converts the corrected PRN_GFX_FONT table (embedded at vz_font_src; the
-; ROM copy at 0x3B94 has typos and is no longer read) (64 glyphs, 5
-; bytes each, column-major, INVERTED polarity -- confirmed against the
-; ROM's own "inverse character output" comment and the space glyph
-; being 0xFF x5) into 64 cached 8x8 Mode-1 tiles (16 bytes each, 2
-; bits/pixel) at FONT_TILE_CACHE. Source glyph is 5 columns wide,
-; placed left-aligned in the 8-wide cell with 3 blank padding columns.
-; "On" pixel = 2-bit value 3, matching vz_blit_frame's convention.
-;
-; Row-bit-order is bit0=top row, bit7=bottom row -- confirmed by
-; rendering multiple asymmetric letters (U, L, P, F, A, B) both ways
-; and comparing: bit7-top produced backwards/mirrored letterforms
-; (U rendered as an arch, L as a mirrored Γ, etc.), bit0-top rendered
-; all of them correctly. Symmetric letters like H or O look fine
-; either way, which is why the original single-glyph 'H' test didn't
-; catch this.
-;
-; Verified independently: ran this exact routine against the real
-; ROM font bytes in a Z80 emulator and diffed the output byte-for-byte
-; against a from-scratch Python reference implementation of the same
-; spec -- exact match across all 64 glyphs (1024 bytes) before this
-; was wired into the build.
+; Title credits.  Patched in at 0x5396, the game's FINAL (static) draw of the
+; title screen -- after the 15-step slide-in has put the 13 GHOSTS logo in its
+; final position.  Runs the original sub_6012h (HL = screen list), then draws
+; four centred 3x5 lines under the logo (logo ends on VZ row 39):
+; ink rows 41-45, 47-51, 53-57, 59-63 (rows 56-63 are the bottom margin).
+; vz_cred_on makes the next vz_blit_frame (any screen) wipe the margin rows.
 ; ---------------------------------------------------------------------------
-vz_build_font_cache:
-	ld	hl, vz_font_src	; corrected copy embedded below (NOT the ROM's)
-	ld	de, TILE_CACHE		; FONT_TILE_CACHE
-	ld	b, 64
-fc_glyph_loop:
-	push	bc
-	push	hl
-	push	de
-	call	vz_convert_glyph
-	pop	de
-	pop	hl
-	pop	bc
-	ld	a,l
-	add	a,5
-	ld	l,a
-	ld	a,h
-	adc	a,0
-	ld	h,a
-	ld	a,e
-	add	a,16
-	ld	e,a
-	ld	a,d
-	adc	a,0
-	ld	d,a
-	djnz	fc_glyph_loop
-	ret
+CRED_L1 EQU 07000h+41*32+3		; 25 chars, cell 3
+CRED_L2 EQU 07000h+47*32+10		; 11 chars, cell 10
+CRED_L3 EQU 07000h+53*32+3		; 26 chars, cell 3
+CRED_L4 EQU 07000h+59*32+5		; 22 chars, cell 5
 
-; vz_convert_glyph: HL=src glyph(5 bytes), DE=dst tile(16 bytes).
-; Both preserved (caller advances). Destroys AF,BC.
-vz_convert_glyph:
-	ld	(fc_src), hl
-	ld	(fc_dst_row), de
-	xor	a
-	ld	(fc_row), a
-fc_row_loop:
-	ld	hl, fc_row
-	ld	b,(hl)
-	ld	a,001h
-fc_mask_loop:
-	ld	c,a
-	ld	a,b
-	or	a
-	jr	z, fc_mask_done
-	dec	b
-	ld	a,c
-	sla	a
-	jr	fc_mask_loop
-fc_mask_done:
-	ld	a,c
-	ld	(fc_rowmask), a
-
-	xor	a
-	ld	(fc_acc), a
-	ld	hl,(fc_src)
-	ld	a,(fc_rowmask)
-	call	fc_pixel
-	call	fc_accum
-	inc	hl
-	ld	a,(fc_rowmask)
-	call	fc_pixel
-	call	fc_accum
-	inc	hl
-	ld	a,(fc_rowmask)
-	call	fc_pixel
-	call	fc_accum
-	inc	hl
-	ld	a,(fc_rowmask)
-	call	fc_pixel
-	call	fc_accum
-	ld	a,(fc_acc)
-	ld	de,(fc_dst_row)
-	ld	(de),a
-	inc	de
-	ld	(fc_dst_row),de
-
-	xor	a
-	ld	(fc_acc), a
-	inc	hl
-	ld	a,(fc_rowmask)
-	call	fc_pixel
-	call	fc_accum
-	xor	a
-	call	fc_accum
-	xor	a
-	call	fc_accum
-	xor	a
-	call	fc_accum
-	ld	a,(fc_acc)
-	ld	de,(fc_dst_row)
-	ld	(de),a
-	inc	de
-	ld	(fc_dst_row),de
-
-	ld	a,(fc_row)
-	inc	a
-	ld	(fc_row),a
-	cp	8
-	jp	nz, fc_row_loop
-	ret
-
-; fc_pixel: In HL->src byte, A=rowmask. Out A=0 or 3. Destroys B.
-fc_pixel:
-	ld	b,(hl)
-	and	b
-	jr	z, fc_pixel_on
-	xor	a
-	ret
-fc_pixel_on:
-	ld	a,3
-	ret
-
-; fc_accum: A_in=pixel(0/3). fc_acc = fc_acc*4 + A_in.
-fc_accum:
+vz_title_draw:
+	call	06012h
 	push	af
-	ld	a,(fc_acc)
-	sla	a
-	sla	a
-	ld	b,a
+	push	bc
+	push	de
+	push	hl
+	ld	de, CRED_L1
+	ld	hl, cred_s1
+	call	vz_puts3
+	ld	de, CRED_L2
+	ld	hl, cred_s2
+	call	vz_puts3
+	ld	de, CRED_L3
+	ld	hl, cred_s3
+	call	vz_puts3
+	ld	de, CRED_L4
+	ld	hl, cred_s4
+	call	vz_puts3
+	ld	a, 1
+	ld	(vz_cred_on), a
+	pop	hl
+	pop	de
+	pop	bc
 	pop	af
-	or	b
-	ld	(fc_acc), a
 	ret
 
-fc_src:      defw 0
-fc_row:      defb 0
-fc_rowmask:  defb 0
-fc_acc:      defb 0
-fc_dst_row:  defw 0
+; vz_cred_clear: blank the bottom margin (rows 56-63) and drop the flag.
+; Preserves HL; destroys AF, BC, DE.
+vz_cred_clear:
+	push	hl
+	ld	hl, 07700h
+	ld	de, 07701h
+	ld	bc, 000ffh
+	ld	(hl), 0
+	ldir
+	xor	a
+	ld	(vz_cred_on), a
+	pop	hl
+	ret
+
+vz_cred_on:	defb	0
+cred_s1:	defm	"(C) 1983 BRYAN EGGERS AND", 0
+cred_s2:	defm	"LARRY PAYNE", 0
+cred_s3:	defm	"MUSIC AND SOUND BY FANFARE", 0
+cred_s4:	defm	"(C) 1982 JON BOKELMAN.", 0
 
 ; End of HAL
