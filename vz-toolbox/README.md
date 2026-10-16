@@ -44,7 +44,8 @@ cd 13-ghosts-vz-test
 make clean && make VZPACK="$VZPACK" VZ2WAV="$VZ2WAV"
 ```
 
-Output: `ghost13_two_stage.wav` (the tape to load). Expected md5s of every
+Output: `ghost13_two_stage.wav` (normal speed), `ghost13_fast.wav` (fast loader, normal
+phase) and `ghost13_fast_inv.wav` (fast loader, inverted phase). Expected md5s of every
 generated file for the reference build are in `selftest/expected_13ghosts.md5`:
 
 ```bash

@@ -1,5 +1,17 @@
 # =============================================================================
-# Makefile for 13 Ghosts VZ200/RC39 port (v8) -- four-file tape
+# Makefile for 13 Ghosts VZ200/RC39 port (v8) -- four-file tape, three encodings
+#
+#   make            all three tapes below
+#   make standard   ghost13_two_stage.wav   normal-speed ROM-format tape (the original)
+#   make fast       ghost13_fast.wav        fast loader, normal phase (stock VZ200, emulators)
+#   make fast-inv   ghost13_fast_inv.wav    fast loader, inverted phase (--fast-invert, for
+#                                           machines whose tape input inverts the signal,
+#                                           e.g. the RC39/HB200 homebrew)
+#
+#   All three use the same stage 1 (a normal ROM-format block) and the same three parts; only
+#   the way the parts are put on tape differs. In the fast tapes each part is a self-booting
+#   fast block (vz2wav --fast --fast-vram) and the tiny stubs at the start of parts 1 and 2
+#   still chain to the next part through the ROM loader.
 #
 #   stage1  (7AE8)  forces bank 0 and the 10K RAM window, loads the next file
 #   part 1  (4000)  stub + compressed screens + original game bytes 5200-644A
@@ -30,11 +42,24 @@ PARTS       = ghost13_p1 ghost13_p2 ghost13_p3
 PART_VZ     = $(addsuffix .vz,$(PARTS))
 PART_WAV    = $(addsuffix .wav,$(PARTS))
 
-FINAL_WAV = ghost13_two_stage.wav
+FINAL_WAV      = ghost13_two_stage.wav
+FAST_WAV       = ghost13_fast.wav
+FAST_INV_WAV   = ghost13_fast_inv.wav
 
-.PHONY: all stage1 parts clean
+# Fast encodings. --fast-vram is required for this game: parts 2 and 3 reach above 0xC000, which
+# the default receiver placement cannot reach; --fast-vram puts the receiver and its stack in
+# unused video RAM (0x7200-0x77FF), which the game never loads into.
+FAST_FLAGS     ?= --fast --fast-vram
+FAST_PART_WAV     = $(addsuffix _fast.wav,$(PARTS))
+FAST_INV_PART_WAV = $(addsuffix _fast_inv.wav,$(PARTS))
 
-all: $(FINAL_WAV)
+.PHONY: all standard fast fast-inv stage1 parts clean
+
+all: $(FINAL_WAV) $(FAST_WAV) $(FAST_INV_WAV)
+
+standard: $(FINAL_WAV)
+fast: $(FAST_WAV)
+fast-inv: $(FAST_INV_WAV)
 
 # ---- stage 1 ----
 $(STAGE1_BIN): $(STAGE1_ASM)
@@ -61,8 +86,17 @@ ghost13_parts.stamp: $(PORT_DEPS)
 
 $(PART_VZ): ghost13_parts.stamp ;
 
+# normal-speed part audio (ghost13_p1.wav ...)
 %.wav: %.vz
 	$(VZ2WAV) $< $@
+
+# fast-loader part audio, normal phase (ghost13_p1_fast.wav ...)
+%_fast.wav: %.vz
+	$(VZ2WAV) $(FAST_FLAGS) --fast-normal $< $@
+
+# fast-loader part audio, inverted phase (ghost13_p1_fast_inv.wav ...)
+%_fast_inv.wav: %.vz
+	$(VZ2WAV) $(FAST_FLAGS) --fast-invert $< $@
 
 parts: $(PART_VZ)
 
@@ -70,7 +104,15 @@ parts: $(PART_VZ)
 $(FINAL_WAV): $(STAGE1_WAV) $(PART_WAV)
 	$(PYTHON) splice_wav.py $(STAGE1_WAV) $(PART_WAV) $(FINAL_WAV)
 
+# stage 1 is a normal ROM-format block in every variant; only the parts change
+$(FAST_WAV): $(STAGE1_WAV) $(FAST_PART_WAV)
+	$(PYTHON) splice_wav.py $(STAGE1_WAV) $(FAST_PART_WAV) $(FAST_WAV)
+
+$(FAST_INV_WAV): $(STAGE1_WAV) $(FAST_INV_PART_WAV)
+	$(PYTHON) splice_wav.py $(STAGE1_WAV) $(FAST_INV_PART_WAV) $(FAST_INV_WAV)
+
 clean:
 	rm -f stage1.bin stage1.vz stage1.wav stage1.o ghost13_p*.bin ghost13_p*.vz ghost13_p*.wav \
 	      ghost13_parts.stamp ghost13_hal.asm ghost13_hal.bin ghost13_hal.map ghost13_hal.o \
-	      ghost13_ram.bin $(FINAL_WAV)
+	      ghost13_ram.bin $(FINAL_WAV) $(FAST_WAV) $(FAST_INV_WAV) \
+	      ghost13_p*_fast.wav ghost13_p*_fast_inv.wav

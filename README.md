@@ -40,9 +40,19 @@ loads the following file.  Their WAVs are concatenated into one tape.
 make VZPACK=/path/to/vzpack VZ2WAV=/path/to/vz2wav
 ```
 
-Produces `ghost13_two_stage.wav` — the file to actually load on
-hardware or an emulator. `make stage1` / `make parts` build just one
-side; `make clean` removes all generated output. `VZPACK`/`VZ2WAV`
+Produces three tapes, all with the same stage 1 and the same three parts:
+
+| Target | File | Use |
+|---|---|---|
+| `make standard` | `ghost13_two_stage.wav` | normal-speed ROM-format tape (~476 s) |
+| `make fast` | `ghost13_fast.wav` | fast loader, normal phase: stock VZ200 and emulators (~103 s) |
+| `make fast-inv` | `ghost13_fast_inv.wav` | fast loader, inverted phase (`--fast-invert`): machines whose tape input inverts the signal, e.g. the RC39/HB200 homebrew (~103 s) |
+
+Plain `make` builds all three. The fast tapes encode each part with
+`vz2wav --fast --fast-vram` (`--fast-vram` is required here: parts 2 and 3 reach
+above `0xC000`; override with `FAST_FLAGS=`). They need vz2wav 2.3 or later,
+where the normal phase is the default. `make stage1` / `make parts` build
+just one side; `make clean` removes all generated output. `VZPACK`/`VZ2WAV`
 default to the paths in the `Makefile`; override them if yours live
 elsewhere.
 
@@ -51,6 +61,22 @@ assembly — both have been verified to produce byte-identical output
 for this source.
 
 ---
+
+## Controls (VZ200 keyboard)
+
+| Key | Action |
+|---|---|
+| `W` / `A` / `S` / `D` | up / left / down / right |
+| `Space` | fire |
+| `T` | toggle sound on/off (one toggle per press; holding the key does not flip it again) |
+| `Ctrl`+`Q` | restart: back to the title screen (the TRS-80's Clear+Break chord; `Q` alone does nothing) |
+| `Return` | enter |
+
+`T` is polled only during a real game, the same place the original polled its `S`/`T`
+sound keys. Pressing it while the demo is running just starts a game and does not also
+toggle the sound. The original TRS-80 `S` (off) / `T` (on) pair is gone: `S` is now Down,
+so it can no longer mute the game by accident. The extra direction keys (`X`, `Z`, `M`,
+`,`, `.`) are no longer read.
 
 ## Current pipeline (what the build actually uses)
 
@@ -61,13 +87,13 @@ for this source.
 | `port_13ghosts_v8.py` | **Current** porting script (patch in place; see above). Writes `ghost13_p1/p2/p3.vz` (+ `.bin`), `ghost13_hal.asm/.map`, and `ghost13_ram.bin` (flat 64K image of everything loaded, for emulator tests). |
 | `hal_vz.asm` | The VZ200/RC39 replacement routines the patched game calls: boot, screen-table fill, video blit + HUD, keyboard, sound, font tile cache. |
 | `stage1.asm` | The bootstrap (12 bytes): bank 0 + RAM in the 4000-67FF window, then call the ROM's `TAPE_LOAD_COMMON` to load the next file. |
-| `Makefile` | The build chain. `make` → `ghost13_two_stage.wav` (stage1 + 3 parts). |
+| `Makefile` | The build chain. `make` → `ghost13_two_stage.wav`, `ghost13_fast.wav`, `ghost13_fast_inv.wav` (stage1 + 3 parts each). |
 | `splice_wav.py` | Concatenates the per-file WAVs into the final tape image. Generic — works for any number of same-format WAV segments. |
 | `gen_blit.py` | Regenerates the `vz_blit_frame` / `vz_build_blit_tables` block in `hal_vz.asm` (table-driven, 32-pair unrolled, ~22 ms/frame). Edit the generator, not the generated block. |
 | `verify_blit.py` | Runs the new blit and a baseline build's original bit-twiddling blit on identical buffers in the Z80 emulator and compares VRAM byte for byte. Usage: `verify_blit.py [BASELINE_DIR]` (dir holding the old `ghost13_ram.bin` + `ghost13_hal.map`). |
 | `verify_font_cache.py` | Runs the real `vz_boot` in a Z80 emulator with the ROM font poisoned and checks the tile cache against an independent conversion of the corrected font table. |
 
-**Generated, not checked in as source** (produced by the Makefile — listed here so the names are recognizable if you see them on disk): `stage1.bin`/`.vz`/`.wav`, `ghost13_p*.bin`/`.vz`/`.wav`, `ghost13_hal.*`, `ghost13_ram.bin`, `ghost13_two_stage.wav`, `*.o`.
+**Generated, not checked in as source** (produced by the Makefile — listed here so the names are recognizable if you see them on disk): `stage1.bin`/`.vz`/`.wav`, `ghost13_p*.bin`/`.vz`/`.wav`, `ghost13_hal.*`, `ghost13_ram.bin`, `ghost13_two_stage.wav`, `ghost13_fast.wav`, `ghost13_fast_inv.wav`, `ghost13_p*_fast*.wav`, `*.o`.
 
 ## Documentation
 

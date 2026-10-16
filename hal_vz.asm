@@ -78,7 +78,7 @@ vz_ist_loop:
 ; Sound.  The original drives the TRS-80 cassette/DAC port with a 2-bit
 ; pattern in A.  vz_snd_out_a maps it to the VZ200 speaker bits (0 and 5)
 ; in the 0x6800 latch (keeping graphics mode 1 = bit 3).  The game's own
-; 'S' / 'T' sound-off / sound-on keys store 090h / 0FFh at SND_ENABLE.
+; sound handler (sub_5507h, driven by 'T' through vz_read_kbd_3804) stores 090h / 0FFh at SND_ENABLE.
 ; ---------------------------------------------------------------------------
 vz_snd_out_a:
 	push	af
@@ -146,6 +146,22 @@ vz_snd_c807:
 ; The VZ200 keyboard is active-low: reading 0x6800 selects all rows at once.
 ; ---------------------------------------------------------------------------
 vz_check_fire:
+	; T-toggle latch (see vz_read_kbd_3804): re-arm it whenever T is up.  While T
+	; is down during the demo, hold it disarmed so the key that leaves the demo
+	; doesn't also toggle the sound once the game starts.
+	ld	a, (068feh)		; Row A0: 'T' = bit 0, active low
+	rra				; carry = 1 when T is up
+	jr	c, vz_cf_tup
+	ld	a, (061cfh)		; game flags: bit 0 = demo running
+	rra
+	jr	nc, vz_cf_scan		; in a real game: leave the latch alone
+	ld	a, 001h			; demo: swallow this press
+	jr	vz_cf_set
+vz_cf_tup:
+	xor	a				; T up: re-arm
+vz_cf_set:
+	ld	(vz_t_down), a
+vz_cf_scan:
 	ld	a, (06800h)
 	cpl
 	and	03fh			; low 6 bits = key columns; NZ = some key pressed
@@ -168,111 +184,101 @@ vz_blit_site1:
 	ret
 
 ; ---------------------------------------------------------------------------
-; vz_read_kbd_3804: replaces ld a,(3804h): 'S' -> 08h (sound off), 'T' -> 10h (sound on)
+; Keyboard.  Controls:  W / A / S / D = up / left / down / right,
+; Space = fire, Ctrl+Q = restart, Return = enter, T = toggle sound on/off.
+; (The VZ200 keyboard is active-low: a pressed key reads as 0.)
+; ---------------------------------------------------------------------------
+
+; ---------------------------------------------------------------------------
+; vz_read_kbd_3804: replaces ld a,(3804h), which the game's S/T handler
+; (sub_5507h) reads as 08h = sound off, 10h = sound on.  'T' is a toggle: on
+; each fresh press this returns 08h if sound is currently on (SND_ENABLE = 0FFh)
+; and 10h if it is off, so the game's own handler stores the opposite value.
+; Returns 0 while T is up or still held from an earlier poll.  vz_t_down is
+; the "already toggled for this press" latch; vz_check_fire re-arms it.
 ; ---------------------------------------------------------------------------
 vz_read_kbd_3804:
-	ld	a, (068fdh)		; Row A1
-	bit	1, a			; 'S' -> sound off
-	jr	nz, vz_no_s
-	ld	a, 008h
-	ret
-vz_no_s:
 	ld	a, (068feh)		; Row A0
-	bit	0, a			; 'T' -> sound on
-	jr	nz, vz_no_t
-	ld	a, 010h
+	bit	0, a			; 'T'
+	jr	nz, vz_no_t		; not pressed
+	ld	a, (vz_t_down)
+	or	a
+	jr	nz, vz_no_t		; still held: already toggled for this press
+	inc	a
+	ld	(vz_t_down), a
+	ld	a, (SND_ENABLE)
+	cp	0ffh
+	ld	a, 008h			; sound is on  -> ask the game for "off"
+	ret	z
+	ld	a, 010h			; sound is off -> ask the game for "on"
 	ret
 vz_no_t:
 	xor	a
 	ret
 
+vz_t_down:
+	defb	000h
+
 ; ---------------------------------------------------------------------------
 ; vz_read_kbd_3840: Replaces reading 0x3840 (TRS-80 control row)
 ; TRS-80 bits:
-;   bit 7 = Space (Fire)
-;   bit 6 = Right Arrow (or 'X'/'D')
-;   bit 5 = Left Arrow  (or 'Z'/'A')
-;   bit 4 = Down Arrow  (or 'S')
-;   bit 3 = Up Arrow    (or 'W')
-;   bit 2 = Break (or 'Q')
-;   bit 1 = Clear
-;   bit 0 = Enter
+;   bit 7 = Space  (Fire)
+;   bit 6 = Right  ('D')
+;   bit 5 = Left   ('A')
+;   bit 4 = Down   ('S')
+;   bit 3 = Up     ('W')
+;   bit 2 = Break  (Ctrl+Q)
+;   bit 1 = Clear  (Ctrl+Q)
+;   bit 0 = Enter  (Return)
+; Ctrl+Q sets Break and Clear together: the TRS-80's own Clear+Break chord, which
+; the game's main loop tests for as exactly 06h and answers by restarting at the
+; title (jp 537Dh).  Q on its own does nothing, so it can't be hit by accident.
 ; ---------------------------------------------------------------------------
 vz_read_kbd_3840:
 	push	bc
 	ld	b, 000h		; Accumulated result in B
 
-	; 1. Check Space (Fire -> bit 7)
+	; 1. Space (Fire -> bit 7).  Row A4: bit 4 = Space
 	ld	a, (068efh)	; Row A4
-	bit	4, a		; Bit 4 = Space
+	bit	4, a
 	jr	nz, vz_k_right
 	set	7, b
 
 vz_k_right:
-	; 2. Check Right Arrow (bit 6):
-	; Row A4: bit 3 = ',' (CTRL+, is right arrow)
-	; Row A2: bit 1 = 'X'
-	; Row A1: bit 3 = 'D'
-	bit	3, a		; Row A4 bit 3 (comma)
-	jr	z, vz_set_right
-	ld	a, (068fbh)	; Row A2
-	bit	1, a		; 'X'
-	jr	z, vz_set_right
+	; 2. Row A1 (0x68FD): bit 3 = 'D' (right), bit 4 = 'A' (left), bit 1 = 'S' (down)
 	ld	a, (068fdh)	; Row A1
+	ld	c, a		; keep it: bit 2 = CTRL, used for Ctrl+Q below
 	bit	3, a		; 'D'
 	jr	nz, vz_k_left
-vz_set_right:
 	set	6, b
 
 vz_k_left:
-	; 3. Check Left Arrow (bit 5):
-	; Row A4: bit 5 = 'M' (CTRL+M is left arrow)
-	; Row A2: bit 4 = 'Z'
-	; Row A1: bit 4 = 'A'
-	ld	a, (068efh)	; Row A4
-	bit	5, a		; 'M'
-	jr	z, vz_set_left
-	ld	a, (068fbh)	; Row A2
-	bit	4, a		; 'Z'
-	jr	z, vz_set_left
-	ld	a, (068fdh)	; Row A1
 	bit	4, a		; 'A'
 	jr	nz, vz_k_down
-vz_set_left:
 	set	5, b
 
 vz_k_down:
-	; 4. Check Down Arrow (bit 4):
-	; Row A1: bit 1 = 'S'
-	ld	a, (068fdh)	; Row A1
 	bit	1, a		; 'S'
 	jr	nz, vz_k_up
 	set	4, b
 
 vz_k_up:
-	; 5. Check Up Arrow (bit 3):
-	; Row A4: bit 1 = '.' (CTRL+. is up arrow)
-	; Row A0: bit 1 = 'W'
-	ld	a, (068efh)	; Row A4
-	bit	1, a		; '.'
-	jr	z, vz_set_up
+	; 3. Row A0 (0x68FE): bit 1 = 'W' (up), bit 4 = 'Q' (restart, only with CTRL)
 	ld	a, (068feh)	; Row A0
 	bit	1, a		; 'W'
 	jr	nz, vz_k_break
-vz_set_up:
 	set	3, b
 
 vz_k_break:
-	; 6. Check Break / Quit (bit 2):
-	; Row A0: bit 4 = 'Q'
-	ld	a, (068feh)	; Row A0
 	bit	4, a		; 'Q'
 	jr	nz, vz_k_enter
-	set	2, b
+	bit	2, c		; CTRL (Row A1 bit 2, active low)
+	jr	nz, vz_k_enter
+	set	2, b		; Break
+	set	1, b		; + Clear
 
 vz_k_enter:
-	; 7. Check Enter / Return (bit 0):
-	; Row A6 (0x68BF): bit 2 = RETN
+	; 4. Enter / Return (bit 0).  Row A6 (0x68BF): bit 2 = RETN
 	ld	a, (068bfh)	; Row A6
 	bit	2, a		; RETN
 	jr	nz, vz_k_done
