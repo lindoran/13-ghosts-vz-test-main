@@ -44,15 +44,19 @@ Produces three tapes, all with the same stage 1 and the same three parts:
 
 | Target | File | Use |
 |---|---|---|
-| `make standard` | `ghost13_two_stage.wav` | normal-speed ROM-format tape (~476 s) |
-| `make fast` | `ghost13_fast.wav` | fast loader, normal phase: stock VZ200 and emulators (~103 s) |
-| `make fast-inv` | `ghost13_fast_inv.wav` | fast loader, inverted phase (`--fast-invert`): machines whose tape input inverts the signal, e.g. the RC39/HB200 homebrew (~103 s) |
+| `make standard` | `assets/ghost13_two_stage.wav` | normal-speed ROM-format tape (~476 s) |
+| `make fast` | `prod/ghost13_fast.wav` | fast loader, normal phase: stock VZ200 and emulators (~103 s) |
+| `make fast-inv` | `prod/ghost13_fast_inv.wav` | fast loader, inverted phase (`--fast-invert`): machines whose tape input inverts the signal, e.g. the RC39/HB200 homebrew (~103 s) |
 
 Plain `make` builds all three. The fast tapes encode each part with
 `vz2wav --fast --fast-vram` (`--fast-vram` is required here: parts 2 and 3 reach
 above `0xC000`; override with `FAST_FLAGS=`). They need vz2wav 2.3 or later,
 where the normal phase is the default. `make stage1` / `make parts` build
-just one side; `make clean` removes all generated output. `VZPACK`/`VZ2WAV`
+just one side. The emulator-ready part files (`.vz`) and the two distributable
+fast tapes and all `.vz` emulator inputs (including the stage-one loader) are
+in `prod/`; intermediate files and the standard-speed tape are in `assets/`.
+`make clean` removes generated files from both locations and
+cleans legacy root-level build outputs. `VZPACK`/`VZ2WAV`
 default to the paths in the `Makefile`; override them if yours live
 elsewhere.
 
@@ -84,16 +88,20 @@ so it can no longer mute the game by accident. The extra direction keys (`X`, `Z
 |---|---|
 | `cmd_tools.py` | Parses TRS-80 TRSDOS `.cmd` load-module format, reassembles a flat memory image. Standalone; not part of the VZ200 build itself, but what originally produced `ghost13b.asm`'s source bytes. |
 | `ghost13b.asm` | Full `z80dasm` disassembly of the original TRS-80 game (the un-protection-patched variant — see `PORTING_NOTES.md`). v8 uses it only to **recover the original bytes** (from its `;addr<TAB>bytes` comments); its instruction text is no longer assembled. |
-| `port_13ghosts_v8.py` | **Current** porting script (patch in place; see above). Writes `ghost13_p1/p2/p3.vz` (+ `.bin`), `ghost13_hal.asm/.map`, and `ghost13_ram.bin` (flat 64K image of everything loaded, for emulator tests). |
-| `hal_vz.asm` | The VZ200/RC39 replacement routines the patched game calls: boot, screen-table fill, video blit + HUD, keyboard, sound, font tile cache. |
+| `port_13ghosts_v8.py` | **Current** porting script (patch in place; see above). Writes `prod/ghost13_p1/p2/p3.vz` for emulator tests, plus intermediate `.bin` files, `ghost13_hal.asm/.map`, and `ghost13_ram.bin` under `assets/`. |
+| `hal_vz.asm` | The VZ200/RC39 replacement routines the patched game calls: boot, screen-table fill, video blit, the 3x5 text renderer (HUD, title credits), keyboard, sound. |
 | `stage1.asm` | The bootstrap (12 bytes): bank 0 + RAM in the 4000-67FF window, then call the ROM's `TAPE_LOAD_COMMON` to load the next file. |
-| `Makefile` | The build chain. `make` → `ghost13_two_stage.wav`, `ghost13_fast.wav`, `ghost13_fast_inv.wav` (stage1 + 3 parts each). |
+| `Makefile` | The build chain. `make` → `assets/ghost13_two_stage.wav`, `prod/ghost13_fast.wav`, and `prod/ghost13_fast_inv.wav` (stage1 + 3 parts each). |
 | `splice_wav.py` | Concatenates the per-file WAVs into the final tape image. Generic — works for any number of same-format WAV segments. |
 | `gen_blit.py` | Regenerates the `vz_blit_frame` / `vz_build_blit_tables` block in `hal_vz.asm` (table-driven, 32-pair unrolled, ~22 ms/frame). Edit the generator, not the generated block. |
 | `verify_blit.py` | Runs the new blit and a baseline build's original bit-twiddling blit on identical buffers in the Z80 emulator and compares VRAM byte for byte. Usage: `verify_blit.py [BASELINE_DIR]` (dir holding the old `ghost13_ram.bin` + `ghost13_hal.map`). |
-| `verify_font_cache.py` | Runs the real `vz_boot` in a Z80 emulator with the ROM font poisoned and checks the tile cache against an independent conversion of the corrected font table. |
+| `verify_hud3.py` | Runs the real `vz_boot` + `vz_draw_hud_row` in a Z80 emulator: checks the 3x5 font cache (all 64 glyphs) and the HUD (score, level name, level, ghosts) byte for byte against an independent render of `font_3x5.asm`, and exercises the game's own score-add routine (`0x5780`) to bound the score field. Writes `hud3_render.png`. |
+| `verify_title.py` | Runs the *real game* from its entry point to the title screen's final draw (`0x5396`) and checks the credits against an independent render, then checks the margin wipe on the next blit. Writes `title_render.png`. |
+| `verify_margins.py` | Checks the HUD / credits margin cleanup: the gameplay blit must not wipe the HUD (no flicker); any other blit must wipe both margins; a pending credits wipe must still happen on the first gameplay blit. |
 
-**Generated, not checked in as source** (produced by the Makefile — listed here so the names are recognizable if you see them on disk): `stage1.bin`/`.vz`/`.wav`, `ghost13_p*.bin`/`.vz`/`.wav`, `ghost13_hal.*`, `ghost13_ram.bin`, `ghost13_two_stage.wav`, `ghost13_fast.wav`, `ghost13_fast_inv.wav`, `ghost13_p*_fast*.wav`, `*.o`.
+`verify_font_cache.py` and `verify_hud_render.py` test the old 8x8 font cache and HUD, which the 3x5 text renderer replaced; they no longer match the build.
+
+**Generated, not checked in as source**: the Makefile keeps intermediate files in `assets/` (stage-one `.bin`/`.wav`, part `.bin`/`.wav`, HAL assembler outputs, RAM image, stamp, and fast/standard audio segments). `prod/` contains all `.vz` files and the distributable `ghost13_fast.wav` / `ghost13_fast_inv.wav`. Both directories are ignored by Git.
 
 ## Documentation
 
@@ -103,7 +111,8 @@ so it can no longer mute the game by accident. The extra direction keys (`X`, `Z
 | `REAUDIT_v2.md` | The `0x7800` → `0x7AE8` relocation (ROM workspace collision + the CLOAD self-corruption bug it caused), the leftover-ROM-call reachability triage, and the toolchain verification (real `z88dk-z80asm`/`vzpack`/`vz2wav` vs. the `pasmo` stand-in). |
 | `STAGE1_NOTES.md` | The bank 1 / bank 2 memory-aliasing hazard (from the RC39 `memory_map.md`), why the two-stage load fixes it, and the ROM-code-level emulator verification (all 8 boot-time bank states, real `TAPE_LOAD_COMMON`). |
 | `PROGRESS.md` | Overall project log through the v2/v3 relocation and re-audit work. **Predates** the bank-aliasing fix and the font-cache work below — treat `STAGE1_NOTES.md` and this README as the more current sources for anything that conflicts. |
-| `texmode-issues.md` | Your own doc on the text-mode/HUD rendering gap (semigraphics-only blitter drops ordinary text) and the `PRN_GFX_FONT` tile-cache plan. The cache itself (`vz_build_font_cache` etc.) is implemented in `hal_vz.asm` and emulator-verified against that plan; the actual HUD *renderer* described in this doc's later sections is still open. |
+| `texmode-issues.md` | Your own doc on the text-mode/HUD rendering gap (semigraphics-only blitter drops ordinary text) and the original 8x8 `PRN_GFX_FONT` tile-cache plan. **Superseded** by the 3x5 renderer below (see "Text rendering"): the 8x8 cache and its HUD are gone. |
+| `font-asset-research/` | The 3x5 bitmap font (`font_3x5.asm`, CC0, 64 glyphs x 2 bytes) the build now uses, plus the research that produced it. Ordinal 0x1F (`_`) was a copy of `<` and is fixed here. |
 
 ## Reference material (not part of this repo — inputs from elsewhere)
 
@@ -125,9 +134,9 @@ read/write bypasses, and the screen-table builder (`C750`).
 
 Fixes this design made unnecessary or that were found along the way:
 
-* the VZ200 ROM font table has 17 bad bytes in 10 glyphs; the corrected table
-  (`VZ200_basic_ROM_listing/corrected_table.asm`) is built into `hal_vz.asm`
-  and the 1 KB tile cache at `F400h` is made from it (`verify_font_cache.py`);
+* text is drawn with the 3x5 font (see "Text rendering" below), not the VZ200 ROM
+  font: the ROM table has 17 bad bytes in 10 glyphs, and an 8x8 cell only gives a
+  16-character line;
 * the first port inverted the sense of the any-key poll (`vz_check_fire`), which
   turned every wait-for-key loop inside out; it now returns NZ when any key
   is down, like the original;
@@ -138,11 +147,47 @@ Memory map after loading, original addresses unless noted: `4000` stub,
 `4050-51FF` screens C, `5200-644A` game, `644B-67FF` screens A, `6800-77FF` VZ200
 I/O + video RAM, `7AE8` stub, `7AF0-886B` screens B, `886C-CA05` game,
 `CA12-E411` game buffers/table (runtime), `E420` replacement routines, `F400`
-tile cache, stack from `FFFF`.
+3x5 font cache (320 bytes), stack from `FFFF`.
 
-Not covered: the high-score name entry reads/writes the TRS-80 video RAM at
-`3Exx/3Fxx` directly (not patched), and the TRSDOS high-score file is not
-saved.  Real hardware has not been tried.
+## Text rendering (3x5 font)
+
+The semigraphics blitter (`vz_blit_frame`) only draws cells with bit 7 set, so the
+game's ordinary text is drawn separately by `vz_draw3` / `vz_puts3` in
+`hal_vz.asm`.  A glyph is 3 pixels of ink plus a blank column = 4 pixels = exactly
+one byte in Mode 1, so every glyph row is one byte, every cell is byte-aligned
+(no shifting) and a 128-pixel line holds **32 cells** (the old 8x8 font held 16).
+The glyphs are stored packed (128 bytes) and expanded at boot into a 320-byte
+cache at `F400h` (`vz_build_font3`).  The font has no lower case; `vz_draw3`
+upper-cases.
+
+| Where | What | How |
+|---|---|---|
+| Top margin (rows 0-7, ink rows 2-6, cells 7-23) | The 17-character level-name field of the game's HUD row (`DDE8h`), exactly as the game holds it, no label | `vz_draw_hud_row`, called from `vz_blit_site1` every gameplay frame |
+| Bottom margin (rows 56-63, ink rows 57-61) | `SCORE ddddddddd LEVEL dd GH dd`: the whole 9-character score field (cols 8-16, the ones digit is never incremented), level, ghosts | same |
+| Bottom of the title (rows 41-63) | Four centred credit lines, condensed from the original credits (the trademark and licence lines are omitted for now) | `vz_title_draw`, patched in at `0x5396` (the title's final static draw, after the logo has slid into place) |
+
+The HUD and credits live in the 8-row margins above and below the 48-row
+playfield, which the screen blit never touches, so they would stay on screen
+after the game moves on.  `vz_margin_dirty` handles that: `vz_draw_hud_row` sets
+bit 1, `vz_title_draw` sets bit 0, and the next `vz_blit_frame` that is **not**
+the gameplay one (game over, demo end, any other screen) wipes both margins
+first.  `vz_blit_site1` drops the HUD bit before each gameplay blit so the HUD is
+never wiped (and flickers) mid-game, but leaves the credits bit so the first
+gameplay frame removes the title credits.  `verify_margins.py` checks this.
+
+Not covered yet (all character-mode text the semigraphics blitter drops, or
+direct TRS-80 video RAM access):
+* the title's trademark / licence lines;
+* the name-entry prompt (screen `37`) and the high-score table (screen `38`);
+* the high-score name entry reads and writes the TRS-80 video RAM at
+  `3EE9h-3EF7h` directly (not patched); on the VZ that range is ROM, so a typed
+  name cannot be stored;
+* the game-over summary (`sub_5B6D`: "Final Score / Level / Ghost") is copied to
+  `3F00h` (rows 12-15) at `0x5BA2` and is not patched, so it never appears;
+* the start-of-game HUD row is written straight to `3FC0h` at `0x56A7`
+  (not patched).
+
+The TRSDOS high-score file is not saved.  Real hardware has not been tried.
 
 ## Superseded — moved to `archive/`
 

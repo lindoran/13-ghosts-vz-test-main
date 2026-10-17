@@ -34,7 +34,7 @@ Memory map after loading (RC39 with the 10K window set to RAM):
   CA12-E411  game buffers, slack, screen table (runtime, original addresses)
   E420-      replacement routines, font, screen list  (tape file 3)
   EE00-F3FF  blit lookup tables, 6 pages (runtime, built by vz_build_blit_tables)
-  F400-F7FF  font tile cache (runtime)
+  F400-F53F  3x5 HUD font cache, 320 bytes (runtime)
 
 Everything the patcher changes is listed in PATCHES and checked against the
 expected original bytes, so the result can be diffed against the original.
@@ -47,19 +47,22 @@ import subprocess
 import sys
 
 SRC_ASM = "ghost13b.asm"                                   # z80dasm listing of the TRS-80 binary
-FONT_SRC = os.path.join("VZ200_basic_ROM_listing", "corrected_table.asm")
+FONT_SRC = os.path.join("font-asset-research", "font_3x5.asm")
 HAL_SRC = "hal_vz.asm"
+ASSETS_DIR = "assets"
+PROD_DIR = "prod"
 
 ORIG_LO, ORIG_HI = 0x5200, 0xCA05
 CODE_RANGES = [(0x535A, 0x60A8), (0xC587, 0xCA05)]         # real code; the rest is data
 GAME_ENTRY = 0x535A
 
 HAL_BASE = 0xE420
-TILE_CACHE = 0xF400
+FONT3_CACHE = 0xF400            # 3x5 HUD font, 64 glyphs x 5 bytes = 320 bytes (runtime)
 SCREEN_TABLE = 0xE212
 SND_ENABLE = 0xC80B
-HUD_SCORE, HUD_LEVEL10, HUD_LEVEL1 = 0xDDDE, 0xDE04, 0xDE05    # buffer 4 row 15 + field offsets
+HUD_SCORE, HUD_LEVEL10, HUD_LEVEL1 = 0xDDDA, 0xDE04, 0xDE05    # buffer 4 row 15 (0xDDD2) + col 8 / 50 / 51; score field = cols 8-16
 HUD_GHOST10, HUD_GHOST1 = 0xDE0F, 0xDE10
+HUD_LEVELNAME = 0xDDE8          # 17-char level-name field, HUD row cols 22-38
 
 BUILDER_START = 0x644A          # `ld hl,l644ah` in the original table builder (0xC753)
 
@@ -215,6 +218,8 @@ def build_patches():
         "buffer 4 -> screen, plus HUD; keeps the original push bc")
     for a in (0x5A7E, 0x5AFD, 0x602A, 0x607B):
         add(a, bytes.fromhex("11 00 3c 01 00 04 ed b0"), call("vz_blit_frame"), "buffer -> screen")
+    # --- title credits: the final static draw of the title screen (after the slide-in)
+    add(0x5396, bytes.fromhex("cd 12 60"), call("vz_title_draw"), "title: draw the screen, then the 3x5 credits")
     # --- keyboard
     for a in (0x5404, 0x54E5, 0x5DBC, 0x5F27):
         add(a, bytes.fromhex("3a 40 38"), call("vz_read_kbd_3840"), "TRS-80 keyboard row 0x3840")
@@ -250,24 +255,26 @@ def apply_patches(img, patches):
 
 # ------------------------------------------------------------------ HAL assembly
 def load_corrected_font():
+    """Emit the packed 3x5 HUD font (64 glyphs x 2 bytes) from font-asset-research/font_3x5.asm."""
     txt = open(FONT_SRC).read()
-    rows = re.findall(r"DEFB\s+((?:0x[0-9A-Fa-f]{2},?){5})", txt)
+    rows = re.findall(r"DEFB\s+0x([0-9A-Fa-f]{2}),0x([0-9A-Fa-f]{2})\s*;\s*ordinal", txt)
     if len(rows) != 64:
-        raise SystemExit(f"{FONT_SRC}: expected 64 glyph rows, found {len(rows)}")
-    out = ["; Corrected PRN_GFX_FONT, 64 glyphs x 5 column bytes (active-low).",
-           "; Generated from corrected_table.asm -- do not hand-edit.", "vz_font_src:"]
-    for i, r in enumerate(rows):
-        out.append("\tdefb\t" + ",".join(f"0{b[2:].upper()}h" for b in r.split(",")) + f"\t\t; glyph {i:02X}")
-    out.append("vz_font_src_end:")
+        raise SystemExit(f"{FONT_SRC}: expected 64 glyphs, found {len(rows)}")
+    out = ["; 3x5 HUD font, 64 glyphs x 2 bytes (15 pixels row-major, bit 14 = top-left).",
+           "; Generated from font-asset-research/font_3x5.asm -- do not hand-edit.", "vz_font3_src:"]
+    for i, (hi, lo) in enumerate(rows):
+        out.append(f"\tdefb\t0{hi.upper()}h,0{lo.upper()}h\t\t; glyph {i:02X}")
+    out.append("vz_font3_src_end:")
     return "\n".join(out) + "\n"
 
 
 def assemble_hal(screen_entries, extra_blob):
-    equ = [f"HAL_BASE EQU 0{HAL_BASE:04X}h", f"TILE_CACHE EQU 0{TILE_CACHE:04X}h",
+    equ = [f"HAL_BASE EQU 0{HAL_BASE:04X}h", f"FONT3_CACHE EQU 0{FONT3_CACHE:04X}h",
            f"SCREEN_TABLE EQU 0{SCREEN_TABLE:04X}h", f"GAME_ENTRY EQU 0{GAME_ENTRY:04X}h",
            f"SND_ENABLE EQU 0{SND_ENABLE:04X}h", f"HUD_SCORE EQU 0{HUD_SCORE:04X}h",
            f"HUD_LEVEL10 EQU 0{HUD_LEVEL10:04X}h", f"HUD_LEVEL1 EQU 0{HUD_LEVEL1:04X}h",
-           f"HUD_GHOST10 EQU 0{HUD_GHOST10:04X}h", f"HUD_GHOST1 EQU 0{HUD_GHOST1:04X}h"]
+           f"HUD_GHOST10 EQU 0{HUD_GHOST10:04X}h", f"HUD_GHOST1 EQU 0{HUD_GHOST1:04X}h",
+           f"HUD_LEVELNAME EQU 0{HUD_LEVELNAME:04X}h"]
     lst = ["", "; compressed-screen list: screen index, address of its stream (after the 04 marker)",
            "vz_screen_list:"]
     for idx, ptr in screen_entries:
@@ -275,29 +282,35 @@ def assemble_hal(screen_entries, extra_blob):
     lst.append("\tdefw\t0FFFFh")
     src = f"\torg\t0{HAL_BASE:04X}h\n" + "\n".join(equ) + "\n" + open(HAL_SRC).read() + "\n" + load_corrected_font() \
         + "\n".join(lst) + "\nvz_hal_end:\n"
-    open("ghost13_hal.asm", "w").write(src)
-    asm = shutil.which("z88dk-z80asm")
+    asm_path = os.path.join(ASSETS_DIR, "ghost13_hal.asm")
+    open(asm_path, "w").write(src)
+    asm_command = os.environ.get("ASM") or "z88dk-z80asm"
+    asm = shutil.which(asm_command)
     if not asm:
-        raise SystemExit("z88dk-z80asm not found (install z88dk, or source vz-toolbox/env.sh)")
+        raise SystemExit(f"{asm_command} not found (install z88dk, or set ASM to the assembler path)")
     for f in ("ghost13_hal.bin", "ghost13_hal.map", "ghost13_hal.o"):
+        f = os.path.join(ASSETS_DIR, f)
         if os.path.exists(f):
             os.remove(f)
-    res = subprocess.run([asm, "-b", "-m", "ghost13_hal.asm"], capture_output=True, text=True)
-    if res.returncode != 0 or not os.path.exists("ghost13_hal.bin"):
+    res = subprocess.run([asm, "-b", "-m", asm_path], capture_output=True, text=True)
+    bin_path = os.path.join(ASSETS_DIR, "ghost13_hal.bin")
+    if res.returncode != 0 or not os.path.exists(bin_path):
         raise SystemExit("assembling ghost13_hal.asm failed:\n" + res.stdout + res.stderr)
-    code = open("ghost13_hal.bin", "rb").read()
+    code = open(bin_path, "rb").read()
     syms = {}
-    for m in re.finditer(r"^(\w+)\s+= \$([0-9A-F]+)", open("ghost13_hal.map").read(), re.M):
+    with open(os.path.join(ASSETS_DIR, "ghost13_hal.map")) as map_file:
+        map_text = map_file.read()
+    for m in re.finditer(r"^(\w+)\s+= \$([0-9A-F]+)", map_text, re.M):
         syms[m.group(1)] = int(m.group(2), 16)
     return code, syms
 
 
 # ------------------------------------------------------------------ packing .vz
-def write_vz(path, name, start, data):
-    base = path[:-3]
-    open(base + ".bin", "wb").write(data)
+def write_vz(path, bin_path, name, start, data):
+    with open(bin_path, "wb") as binary_file:
+        binary_file.write(data)
     if VZPACK and os.path.exists(VZPACK):
-        r = subprocess.run([VZPACK, "--in-bin", base + ".bin", "-s", hex(start), "-o", path, "-t", "mc", "-n", name],
+        r = subprocess.run([VZPACK, "--in-bin", bin_path, "-s", hex(start), "-o", path, "-t", "mc", "-n", name],
                            capture_output=True, text=True)
         if r.returncode == 0:
             return
@@ -307,6 +320,8 @@ def write_vz(path, name, start, data):
 
 
 def main():
+    os.makedirs(ASSETS_DIR, exist_ok=True)
+    os.makedirs(PROD_DIR, exist_ok=True)
     orig = recon_original()
     pristine = bytes(orig)
     print(f"original image rebuilt from {SRC_ASM}: {len(orig)} bytes at {ORIG_LO:04X}-{ORIG_HI:04X}")
@@ -338,12 +353,12 @@ def main():
     code, syms2 = assemble_hal(entries, b"")
     assert syms2 == syms and d_base == HAL_BASE + len(code), "HAL changed size between passes"
     hal_total = len(code) + len(d_blob)
-    if HAL_BASE + hal_total >= TILE_CACHE:
-        raise SystemExit(f"HAL + screen piece D ({hal_total} bytes) overlaps the tile cache at {TILE_CACHE:04X}")
-    BLIT_TABLES = 0xEE00        # must match BLIT_PAGE in hal_vz.asm: six 256-byte runtime pages up to the tile cache
+    if HAL_BASE + hal_total >= FONT3_CACHE:
+        raise SystemExit(f"HAL + screen piece D ({hal_total} bytes) overlaps the font cache at {FONT3_CACHE:04X}")
+    BLIT_TABLES = 0xEE00        # must match BLIT_PAGE in hal_vz.asm: six 256-byte runtime pages up to the font cache
     if HAL_BASE + hal_total > BLIT_TABLES:
         raise SystemExit(f"HAL + screen piece D end at {HAL_BASE + hal_total:04X}, overlapping the blit tables at {BLIT_TABLES:04X}")
-    assert BLIT_TABLES + 6 * 256 <= TILE_CACHE
+    assert BLIT_TABLES + 6 * 256 <= FONT3_CACHE
 
     # patch the original game bytes
     patches = build_patches()
@@ -400,13 +415,19 @@ def main():
     assert set(diff) == {ORIG_LO + i for i in changed if ORIG_LO + i < 0x644B or ORIG_LO + i >= 0x886C}, \
         "unexpected differences from the original"
 
-    write_vz("ghost13_p1.vz", "13GHOSTS1", 0x4000, bytes(f1))
-    write_vz("ghost13_p2.vz", "13GHOSTS2", 0x7AE8, bytes(f2))
-    write_vz("ghost13_p3.vz", "13GHOSTS3", HAL_BASE, bytes(f3))
-    for p in ("ghost13_p1.vz", "ghost13_p2.vz", "ghost13_p3.vz"):
+    write_vz(os.path.join(PROD_DIR, "ghost13_p1.vz"),
+             os.path.join(ASSETS_DIR, "ghost13_p1.bin"), "13GHOSTS1", 0x4000, bytes(f1))
+    write_vz(os.path.join(PROD_DIR, "ghost13_p2.vz"),
+             os.path.join(ASSETS_DIR, "ghost13_p2.bin"), "13GHOSTS2", 0x7AE8, bytes(f2))
+    write_vz(os.path.join(PROD_DIR, "ghost13_p3.vz"),
+             os.path.join(ASSETS_DIR, "ghost13_p3.bin"), "13GHOSTS3", HAL_BASE, bytes(f3))
+    for p in (os.path.join(PROD_DIR, "ghost13_p1.vz"),
+              os.path.join(PROD_DIR, "ghost13_p2.vz"),
+              os.path.join(PROD_DIR, "ghost13_p3.vz")):
         print(f"wrote {p} ({os.path.getsize(p)} bytes)")
     # a flat 64K memory image for emulator / test use
-    open("ghost13_ram.bin", "wb").write(bytes(mem))
+    with open(os.path.join(ASSETS_DIR, "ghost13_ram.bin"), "wb") as ram_file:
+        ram_file.write(bytes(mem))
     return 0
 
 
