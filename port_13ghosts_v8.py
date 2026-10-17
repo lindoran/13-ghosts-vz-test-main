@@ -284,9 +284,10 @@ def assemble_hal(screen_entries, extra_blob):
         + "\n".join(lst) + "\nvz_hal_end:\n"
     asm_path = os.path.join(ASSETS_DIR, "ghost13_hal.asm")
     open(asm_path, "w").write(src)
-    asm = shutil.which("z88dk-z80asm")
+    asm_command = os.environ.get("ASM") or "z88dk-z80asm"
+    asm = shutil.which(asm_command)
     if not asm:
-        raise SystemExit("z88dk-z80asm not found (install z88dk, or source vz-toolbox/env.sh)")
+        raise SystemExit(f"{asm_command} not found (install z88dk, or set ASM to the assembler path)")
     for f in ("ghost13_hal.bin", "ghost13_hal.map", "ghost13_hal.o"):
         f = os.path.join(ASSETS_DIR, f)
         if os.path.exists(f):
