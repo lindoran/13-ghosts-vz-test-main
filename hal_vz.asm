@@ -3,7 +3,7 @@
 ;
 ; Assembled by port_13ghosts_v8.py at HAL_BASE together with the corrected font
 ; table and the compressed-screen list; the patched TRS-80 image calls into
-; these routines.  EQUs (HAL_BASE, TILE_CACHE, ...) are emitted by the script.
+; these routines.  EQUs (HAL_BASE, FONT3_CACHE, ...) are emitted by the script.
 ; =============================================================================
 
 ; ---------------------------------------------------------------------------
@@ -175,6 +175,9 @@ vz_cf_scan:
 ; dropped that push; pop bc then took the buffer address as an LDIR count.
 ; ---------------------------------------------------------------------------
 vz_blit_site1:
+	ld	a, (vz_margin_dirty)	; gameplay redraws the HUD every frame, so it must NOT
+	and	1			; be wiped here: drop the HUD bit, keep a pending credits wipe
+	ld	(vz_margin_dirty), a
 	call	vz_blit_frame
 	call	vz_draw_hud_row
 	pop	de			; our return address
@@ -312,9 +315,9 @@ vz_blit_frame:
 	push	de
 	push	hl
 	push	ix
-	ld	a, (vz_cred_on)		; title credits still in the bottom margin?
+	ld	a, (vz_margin_dirty)	; HUD or title credits left in the margins?
 	or	a
-	call	nz, vz_cred_clear	; (preserves HL; BC/DE/A are reloaded below)
+	call	nz, vz_margin_clear	; (preserves HL; BC/DE/A are reloaded below)
 	ld	b, h
 	ld	c, l			; BC = source
 	ld	ix, 07100h		; first playfield scanline
@@ -1182,7 +1185,11 @@ vhr_score:
 	ld	a, (HUD_GHOST10)
 	call	vz_draw3
 	ld	a, (HUD_GHOST1)
-	jp	vz_draw3
+	call	vz_draw3
+	ld	a, (vz_margin_dirty)	; HUD is on screen: the next blit that is not the
+	or	2			; gameplay one (game over, demo end, any other
+	ld	(vz_margin_dirty), a	; screen) wipes the margins
+	ret
 
 hud_s_score:	defm	"SCORE ", 0
 hud_s_level:	defm	" LEVEL ", 0
@@ -1194,7 +1201,7 @@ hud_s_ghosts:	defm	" GH ", 0
 ; final position.  Runs the original sub_6012h (HL = screen list), then draws
 ; four centred 3x5 lines under the logo (logo ends on VZ row 39):
 ; ink rows 41-45, 47-51, 53-57, 59-63 (rows 56-63 are the bottom margin).
-; vz_cred_on makes the next vz_blit_frame (any screen) wipe the margin rows.
+; vz_margin_dirty bit 0 makes the next vz_blit_frame (any screen) wipe the margins.
 ; ---------------------------------------------------------------------------
 CRED_L1 EQU 07000h+41*32+3		; 25 chars, cell 3
 CRED_L2 EQU 07000h+47*32+10		; 11 chars, cell 10
@@ -1219,29 +1226,38 @@ vz_title_draw:
 	ld	de, CRED_L4
 	ld	hl, cred_s4
 	call	vz_puts3
-	ld	a, 1
-	ld	(vz_cred_on), a
+	ld	a, (vz_margin_dirty)
+	or	1
+	ld	(vz_margin_dirty), a
 	pop	hl
 	pop	de
 	pop	bc
 	pop	af
 	ret
 
-; vz_cred_clear: blank the bottom margin (rows 56-63) and drop the flag.
+; vz_margin_clear: blank both 8-row margins (rows 0-7 = 7000h-70FFh, rows 56-63 =
+; 7700h-77FFh), which the screen blit never touches, and clear the flags.
+; The flag byte vz_margin_dirty: bit 0 = title credits drawn, bit 1 = gameplay HUD
+; drawn (set by vz_draw_hud_row, dropped again by vz_blit_site1 every frame).
 ; Preserves HL; destroys AF, BC, DE.
-vz_cred_clear:
+vz_margin_clear:
 	push	hl
+	ld	hl, 07000h
+	ld	de, 07001h
+	ld	bc, 000ffh
+	ld	(hl), 0
+	ldir
 	ld	hl, 07700h
 	ld	de, 07701h
 	ld	bc, 000ffh
 	ld	(hl), 0
 	ldir
 	xor	a
-	ld	(vz_cred_on), a
+	ld	(vz_margin_dirty), a
 	pop	hl
 	ret
 
-vz_cred_on:	defb	0
+vz_margin_dirty:	defb	0
 cred_s1:	defm	"(C) 1983 BRYAN EGGERS AND", 0
 cred_s2:	defm	"LARRY PAYNE", 0
 cred_s3:	defm	"MUSIC AND SOUND BY FANFARE", 0

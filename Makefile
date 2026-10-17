@@ -40,7 +40,7 @@ STAGE1_VZ  = $(PROD_DIR)/stage1.vz
 STAGE1_WAV = $(ASSETS_DIR)/stage1.wav
 
 PORT_SCRIPT = port_13ghosts_v8.py
-PORT_DEPS   = $(PORT_SCRIPT) ghost13b.asm hal_vz.asm VZ200_basic_ROM_listing/corrected_table.asm
+PORT_DEPS   = $(PORT_SCRIPT) ghost13b.asm hal_vz.asm font-asset-research/font_3x5.asm
 PARTS       = ghost13_p1 ghost13_p2 ghost13_p3
 PART_VZ     = $(addprefix $(PROD_DIR)/,$(addsuffix .vz,$(PARTS)))
 PART_WAV    = $(addprefix $(ASSETS_DIR)/,$(addsuffix .wav,$(PARTS)))

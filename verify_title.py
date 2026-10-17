@@ -6,8 +6,8 @@ next blit.  usage: verify_title.py  (after `make`; needs pip z80 pillow)"""
 import re, sys, time, z80
 from PIL import Image
 ROM=open('VZ200_basic_ROM_listing/refrence_rom.bin','rb').read()
-RAM=open('ghost13_ram.bin','rb').read()
-S={m.group(1):int(m.group(2),16) for m in re.finditer(r'^(\w+)\s+= \$([0-9A-F]+)',open('ghost13_hal.map').read(),re.M)}
+RAM=open('assets/ghost13_ram.bin','rb').read()
+S={m.group(1):int(m.group(2),16) for m in re.finditer(r'^(\w+)\s+= \$([0-9A-F]+)',open('assets/ghost13_hal.map').read(),re.M)}
 FONT=[(int(a,16)<<8)|int(b,16) for a,b in re.findall(r'DEFB\s+0x(..),0x(..)\s*;\s*ordinal',open('font-asset-research/font_3x5.asm').read())]
 def ref_glyph(ch):
     o=ord(ch); o-=0x20 if o>=0x60 else 0
@@ -47,15 +47,15 @@ for y in range(64):
             for dy in range(S5): img.putpixel((x*S5+dx,y*S5+dy),c)
 img.save('title_render.png')
 # clear-on-next-blit: flag set, call the real vz_blit_frame on a blank buffer (HL = buffer), margin rows must clear
-flag=bytes(m.get_state_view())[0x2C+S['vz_cred_on']]
-print("vz_cred_on after title draw:",flag)
+flag=bytes(m.get_state_view())[0x2C+S['vz_margin_dirty']]
+print("vz_margin_dirty after title draw:",flag)
 m.clear_breakpoint(0x5399); ret=0x0100; m.set_memory_block(ret,b'\x00')
 m.set_memory_block(0xE000,bytes(0x400))            # blank 1K screen buffer
 m.sp=0xFFF0; m.set_memory_block(0xFFF0,bytes([ret&255,ret>>8])); m.hl=0xE000; m.pc=S['vz_blit_frame']; m.set_breakpoint(ret)
 for _ in range(50):
     m.ticks_to_stop=2_000_000; m.run()
     if m.pc==ret: break
-v2=vram(); flag2=bytes(m.get_state_view())[0x2C+S['vz_cred_on']]
+v2=vram(); flag2=bytes(m.get_state_view())[0x2C+S['vz_margin_dirty']]
 print("after next blit: bottom margin rows 56-63 clear:", not any(v2[56*32:]), "| flag cleared:", flag2==0, "| playfield rows 8-55 clear:", not any(v2[8*32:56*32]))
 ok&=(not any(v2[56*32:])) and flag2==0 and flag==1
 print("ALL OK" if ok else "FAILED")

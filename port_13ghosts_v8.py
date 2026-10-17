@@ -34,7 +34,7 @@ Memory map after loading (RC39 with the 10K window set to RAM):
   CA12-E411  game buffers, slack, screen table (runtime, original addresses)
   E420-      replacement routines, font, screen list  (tape file 3)
   EE00-F3FF  blit lookup tables, 6 pages (runtime, built by vz_build_blit_tables)
-  F400-F7FF  font tile cache (runtime)
+  F400-F53F  3x5 HUD font cache, 320 bytes (runtime)
 
 Everything the patcher changes is listed in PATCHES and checked against the
 expected original bytes, so the result can be diffed against the original.
@@ -58,7 +58,6 @@ GAME_ENTRY = 0x535A
 
 HAL_BASE = 0xE420
 FONT3_CACHE = 0xF400            # 3x5 HUD font, 64 glyphs x 5 bytes = 320 bytes (runtime)
-TILE_CACHE = FONT3_CACHE
 SCREEN_TABLE = 0xE212
 SND_ENABLE = 0xC80B
 HUD_SCORE, HUD_LEVEL10, HUD_LEVEL1 = 0xDDDA, 0xDE04, 0xDE05    # buffer 4 row 15 (0xDDD2) + col 8 / 50 / 51; score field = cols 8-16
@@ -353,12 +352,12 @@ def main():
     code, syms2 = assemble_hal(entries, b"")
     assert syms2 == syms and d_base == HAL_BASE + len(code), "HAL changed size between passes"
     hal_total = len(code) + len(d_blob)
-    if HAL_BASE + hal_total >= TILE_CACHE:
-        raise SystemExit(f"HAL + screen piece D ({hal_total} bytes) overlaps the tile cache at {TILE_CACHE:04X}")
-    BLIT_TABLES = 0xEE00        # must match BLIT_PAGE in hal_vz.asm: six 256-byte runtime pages up to the tile cache
+    if HAL_BASE + hal_total >= FONT3_CACHE:
+        raise SystemExit(f"HAL + screen piece D ({hal_total} bytes) overlaps the font cache at {FONT3_CACHE:04X}")
+    BLIT_TABLES = 0xEE00        # must match BLIT_PAGE in hal_vz.asm: six 256-byte runtime pages up to the font cache
     if HAL_BASE + hal_total > BLIT_TABLES:
         raise SystemExit(f"HAL + screen piece D end at {HAL_BASE + hal_total:04X}, overlapping the blit tables at {BLIT_TABLES:04X}")
-    assert BLIT_TABLES + 6 * 256 <= TILE_CACHE
+    assert BLIT_TABLES + 6 * 256 <= FONT3_CACHE
 
     # patch the original game bytes
     patches = build_patches()
