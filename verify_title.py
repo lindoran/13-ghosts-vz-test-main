@@ -28,7 +28,7 @@ print("reached title final draw:",bool(hit),"after %.0fs"%(time.time()-t0))
 if not hit: sys.exit("FAILED: did not reach 0x5399")
 vram=lambda: bytes(m.get_state_view())[0x2C+0x7000:0x2C+0x7800]
 v=vram()
-lines=[("(C) 1983 BRYAN EGGERS AND",41),("LARRY PAYNE",47),("MUSIC AND SOUND BY FANFARE",53),("(C) 1982 JON BOKELMAN.",59)]
+lines=[("(C) 1983 BRYAN EGGERS AND",44),("LARRY PAYNE",50),("MUSIC AND SOUND BY FANFARE",56)]   # credits page 1
 exp=bytearray(0x800); ok=True
 for t,y in lines:
     cell=(32-len(t))//2

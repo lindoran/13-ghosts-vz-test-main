@@ -33,8 +33,10 @@ Memory map after loading (RC39 with the 10K window set to RAM):
   886C-CA05  ORIGINAL game bytes, patched
   CA12-E411  game buffers, slack, screen table (runtime, original addresses)
   E420-      replacement routines, font, screen list  (tape file 3)
-  EE00-F3FF  blit lookup tables, 6 pages (runtime, built by vz_build_blit_tables)
   F400-F53F  3x5 HUD font cache, 320 bytes (runtime)
+  F540-F54E  high-score name entry buffer, 15 bytes (runtime)
+  F600-FBFF  blit lookup tables, 6 pages (runtime, built by vz_build_blit_tables)
+  FC00-FFFF  stack (grows down from FFFF)
 
 Everything the patcher changes is listed in PATCHES and checked against the
 expected original bytes, so the result can be diffed against the original.
@@ -58,6 +60,8 @@ GAME_ENTRY = 0x535A
 
 HAL_BASE = 0xE420
 FONT3_CACHE = 0xF400            # 3x5 HUD font, 64 glyphs x 5 bytes = 320 bytes (runtime)
+NAME_BUF = 0xF540               # high-score name entry buffer, 15 bytes (replaces TRS-80 video RAM 3EE9h)
+assert FONT3_CACHE + 320 <= NAME_BUF
 SCREEN_TABLE = 0xE212
 SND_ENABLE = 0xC80B
 HUD_SCORE, HUD_LEVEL10, HUD_LEVEL1 = 0xDDDA, 0xDE04, 0xDE05    # buffer 4 row 15 (0xDDD2) + col 8 / 50 / 51; score field = cols 8-16
@@ -216,10 +220,28 @@ def build_patches():
     # --- video RAM copies: ld de,3C00h / ld bc,0400h / [push bc] / ldir
     add(0x5577, bytes.fromhex("11 00 3c 01 00 04 c5 ed b0"), call("vz_blit_site1"),
         "buffer 4 -> screen, plus HUD; keeps the original push bc")
-    for a in (0x5A7E, 0x5AFD, 0x602A, 0x607B):
+    for a in (0x5A7E, 0x602A, 0x607B):
         add(a, bytes.fromhex("11 00 3c 01 00 04 ed b0"), call("vz_blit_frame"), "buffer -> screen")
     # --- title credits: the final static draw of the title screen (after the slide-in)
     add(0x5396, bytes.fromhex("cd 12 60"), call("vz_title_draw"), "title: draw the screen, then the 3x5 credits")
+    # --- title credits, pages 2 and 3: the idle wait for a key (B = 2) after the tune
+    add(0x53FF, bytes.fromhex("cd ee c9"), call("vz_title_wait"),
+        "title idle wait: same polls as sub_c9eeh, flipping the credits to pages 2 and 3")
+    # --- game-over summary: sub_5b6dh's final copy of rows 12-15 to 3F00h (HL = 0CD12h stays)
+    add(0x5BA2, bytes.fromhex("11 00 3f 01 00 01 ed b0"), call("vz_gameover_blit"),
+        "game over: blit rows 12-15, then the 3x5 summary in the margins")
+    # --- high-score table display (sub_5ae1h): blit, then draw the table from the table itself
+    add(0x5AFD, bytes.fromhex("11 00 3c 01 00 04 ed b0"), call("vz_hs_blit"),
+        "high scores: blit screen 38, then the 3x5 table (ranks, 3-letter names, scores)")
+    # --- high-score name entry: typed name lives in video RAM 3EE9h on the TRS-80 (ROM on the VZ)
+    for a, why in ((0x5B2E, "name entry: buffer start"), (0x5AAF, "name entry: copy of the typed name into the table")):
+        add(a, bytes.fromhex("21 e9 3e"), bytes([0x21]) + u16(NAME_BUF), why)
+    add(0x5B5B, bytes.fromhex("11 f8 3e"), bytes([0x11]) + u16(NAME_BUF + 3), "name entry: limit is 3 letters")
+    add(0x5B31, bytes.fromhex("36 8f cd 3a 60"), call("vz_name_cursor"),
+        "name entry: store the cursor, draw prompt + name in 3x5, then the original sub_603ah")
+    # --- win screen: the status row written to the last text row (3FC0h) after screen 39
+    add(0x56A7, bytes.fromhex("11 c0 3f 01 40 00 ed b0"), call("vz_win_row"),
+        "win screen: the HUD row template (HL = 61D5h) drawn in 3x5 instead of copied to 3FC0h")
     # --- keyboard
     for a in (0x5404, 0x54E5, 0x5DBC, 0x5F27):
         add(a, bytes.fromhex("3a 40 38"), call("vz_read_kbd_3840"), "TRS-80 keyboard row 0x3840")
@@ -274,7 +296,7 @@ def assemble_hal(screen_entries, extra_blob):
            f"SND_ENABLE EQU 0{SND_ENABLE:04X}h", f"HUD_SCORE EQU 0{HUD_SCORE:04X}h",
            f"HUD_LEVEL10 EQU 0{HUD_LEVEL10:04X}h", f"HUD_LEVEL1 EQU 0{HUD_LEVEL1:04X}h",
            f"HUD_GHOST10 EQU 0{HUD_GHOST10:04X}h", f"HUD_GHOST1 EQU 0{HUD_GHOST1:04X}h",
-           f"HUD_LEVELNAME EQU 0{HUD_LEVELNAME:04X}h"]
+           f"HUD_LEVELNAME EQU 0{HUD_LEVELNAME:04X}h", f"NAME_BUF EQU 0{NAME_BUF:04X}h"]
     lst = ["", "; compressed-screen list: screen index, address of its stream (after the 04 marker)",
            "vz_screen_list:"]
     for idx, ptr in screen_entries:
@@ -355,10 +377,9 @@ def main():
     hal_total = len(code) + len(d_blob)
     if HAL_BASE + hal_total >= FONT3_CACHE:
         raise SystemExit(f"HAL + screen piece D ({hal_total} bytes) overlaps the font cache at {FONT3_CACHE:04X}")
-    BLIT_TABLES = 0xEE00        # must match BLIT_PAGE in hal_vz.asm: six 256-byte runtime pages up to the font cache
-    if HAL_BASE + hal_total > BLIT_TABLES:
-        raise SystemExit(f"HAL + screen piece D end at {HAL_BASE + hal_total:04X}, overlapping the blit tables at {BLIT_TABLES:04X}")
-    assert BLIT_TABLES + 6 * 256 <= FONT3_CACHE
+    BLIT_TABLES = 0xF600        # must match BLIT_PAGE in hal_vz.asm: six 256-byte runtime pages
+    assert f"BLIT_PAGE EQU 0{BLIT_TABLES >> 8:02x}h" in open("hal_vz.asm").read(), "BLIT_PAGE in hal_vz.asm does not match BLIT_TABLES"
+    assert NAME_BUF + 15 <= BLIT_TABLES and BLIT_TABLES + 6 * 256 <= 0xFC00, "runtime areas overlap each other or the stack"
 
     # patch the original game bytes
     patches = build_patches()

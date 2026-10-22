@@ -11,7 +11,7 @@
 ; Everything else of the game is already at its ORIGINAL TRS-80 address
 ; (see port_13ghosts_v8.py); this routine only prepares the VZ200/RC39.
 ; ---------------------------------------------------------------------------
-BLIT_PAGE EQU 0eeh		; 6 pages EE00-F3FF: blit lookup tables (runtime)
+BLIT_PAGE EQU 0f6h		; 6 pages F600-FBFF: blit lookup tables (runtime)
 
 vz_boot:
 	di
@@ -309,6 +309,23 @@ vz_k_done:
 ; the table pages never need resetting.  ~150 T-states per pair-of-3-scanlines
 ; versus ~620 average before.
 ; ---------------------------------------------------------------------------
+; vz_blit_rows4: partial blit of the BOTTOM FOUR character rows (rows 12-15 =
+; VZ scanlines 44-55).  HL = source of char row 12 (the game's 0CD12h for the
+; game-over summary), i.e. the 256 bytes the original LDIR'd to 3F00h.
+; Same margin-flag check and register contract as vz_blit_frame.
+vz_blit_rows4:
+	push	af
+	push	bc
+	push	de
+	push	hl
+	push	ix
+	ld	a, (vz_margin_dirty)	; HUD or title credits left in the margins?
+	or	a
+	call	nz, vz_margin_clear	; (preserves HL)
+	ld	ix, 07100h+12*96	; scanline 36 of the playfield
+	ld	a, 4			; 4 character rows
+	jp	vz_bl_go
+
 vz_blit_frame:
 	push	af
 	push	bc
@@ -318,12 +335,13 @@ vz_blit_frame:
 	ld	a, (vz_margin_dirty)	; HUD or title credits left in the margins?
 	or	a
 	call	nz, vz_margin_clear	; (preserves HL; BC/DE/A are reloaded below)
+	ld	ix, 07100h		; first playfield scanline
+	ld	a, 16			; 16 character rows
+vz_bl_go:
 	ld	b, h
 	ld	c, l			; BC = source
-	ld	ix, 07100h		; first playfield scanline
 	ld	h, BLIT_PAGE
 	ld	d, BLIT_PAGE+3
-	ld	a, 16			; 16 character rows
 	push	af			; row counter lives on the stack
 vz_bl_row:
 	ld	a, (bc)
@@ -1154,10 +1172,25 @@ vz_puts3:
 ; ---------------------------------------------------------------------------
 HUD_ROW_ADDR EQU 07721h		; row 57, cell 1
 HUD_NAME_ADDR EQU 07047h		; row 2, cell 7 (17 cells: 7-23)
+HUD_ROW_BASE EQU 0DDD2h		; buffer 4 row 15: the game's per-frame copy of its HUD row template
 
 vz_draw_hud_row:
+	push	ix
+	ld	ix, HUD_ROW_BASE	; buffer 4 row 15, refreshed from the template every frame
+	call	vz_hud_from_ix
+	pop	ix
+	ret
+
+; vz_hud_from_ix: draw the two HUD lines from a 64-byte HUD row at IX (buffer 4's
+; copy at DDD2h during play, the game's own template at 61D5h on the win screen).
+; Field offsets in the row: score +8 (9 chars), level name +22 (17), level digits
+; +50/+51, ghost digits +61/+62.  Destroys AF, BC, DE, HL (IX untouched).
+vz_hud_from_ix:
+	push	ix
+	pop	hl
+	ld	bc, 22
+	add	hl, bc			; HL = level-name field
 	ld	de, HUD_NAME_ADDR	; top margin: level-name string only, no label
-	ld	hl, HUD_LEVELNAME
 	ld	b, 17
 vhr_name:
 	ld	a, (hl)
@@ -1167,7 +1200,10 @@ vhr_name:
 	ld	de, HUD_ROW_ADDR
 	ld	hl, hud_s_score
 	call	vz_puts3
-	ld	hl, HUD_SCORE
+	push	ix
+	pop	hl
+	ld	bc, 8
+	add	hl, bc			; HL = score field
 	ld	b, 9
 vhr_score:
 	ld	a, (hl)
@@ -1176,19 +1212,46 @@ vhr_score:
 	djnz	vhr_score
 	ld	hl, hud_s_level
 	call	vz_puts3
-	ld	a, (HUD_LEVEL10)
+	ld	a, (ix+50)
 	call	vz_draw3
-	ld	a, (HUD_LEVEL1)
+	ld	a, (ix+51)
 	call	vz_draw3
 	ld	hl, hud_s_ghosts
 	call	vz_puts3
-	ld	a, (HUD_GHOST10)
+	ld	a, (ix+61)
 	call	vz_draw3
-	ld	a, (HUD_GHOST1)
+	ld	a, (ix+62)
 	call	vz_draw3
 	ld	a, (vz_margin_dirty)	; HUD is on screen: the next blit that is not the
 	or	2			; gameplay one (game over, demo end, any other
 	ld	(vz_margin_dirty), a	; screen) wipes the margins
+	ret
+
+; ---------------------------------------------------------------------------
+; Win screen status row.  After the last level the game draws screen 39
+; ("YOU BEAT 13 GHOSTS!"), puts the first level-name string ("13 GHOSTS") and a
+; '*' (the winner marker, first character of the score field) into its HUD row
+; template at 61D5h, and copied the 64-byte row to the TRS-80 screen at 3FC0h
+; (0x56A7, `ld de,3FC0h / ld bc,0040h / ldir`, HL = 61D5h).  Patched to draw it
+; with the HUD routine instead.  Bit 0 keeps it until the next non-gameplay blit.
+; ---------------------------------------------------------------------------
+vz_win_row:
+	push	af
+	push	bc
+	push	de
+	push	hl
+	push	ix
+	push	hl
+	pop	ix			; IX = the game's HUD row template
+	call	vz_hud_from_ix
+	ld	a, (vz_margin_dirty)
+	or	1
+	ld	(vz_margin_dirty), a
+	pop	ix
+	pop	hl
+	pop	de
+	pop	bc
+	pop	af
 	ret
 
 hud_s_score:	defm	"SCORE ", 0
@@ -1196,49 +1259,126 @@ hud_s_level:	defm	" LEVEL ", 0
 hud_s_ghosts:	defm	" GH ", 0
 
 ; ---------------------------------------------------------------------------
-; Title credits.  Patched in at 0x5396, the game's FINAL (static) draw of the
-; title screen -- after the 15-step slide-in has put the 13 GHOSTS logo in its
-; final position.  Runs the original sub_6012h (HL = screen list), then draws
-; four centred 3x5 lines under the logo (logo ends on VZ row 39):
-; ink rows 41-45, 47-51, 53-57, 59-63 (rows 56-63 are the bottom margin).
-; vz_margin_dirty bit 0 makes the next vz_blit_frame (any screen) wipe the margins.
+; Title credits, three pages of up to three centred 3x5 lines in rows 41-63
+; (the logo ends on VZ row 39).  The full original credit text is kept, split
+; into pages that follow the title's own timeline:
+;   page 1  after the slide-in has put the logo in place (vz_title_draw, patched
+;           in at 0x5396, the game's FINAL static draw), shown through the tune;
+;   page 2  as the idle wait for a key starts (vz_title_wait, patched in at
+;           0x53FF in place of `call sub_c9eeh`, B = 2);
+;   page 3  after the first of that wait's two ~2.8 s passes.
+; The music engine is not touched: it is cycle-counted, so nothing is drawn
+; while it runs.  Rows 56-63 are the bottom margin, so bit 0 of
+; vz_margin_dirty makes the next vz_blit_frame (any screen) wipe them.
 ; ---------------------------------------------------------------------------
-CRED_L1 EQU 07000h+41*32+3		; 25 chars, cell 3
-CRED_L2 EQU 07000h+47*32+10		; 11 chars, cell 10
-CRED_L3 EQU 07000h+53*32+3		; 26 chars, cell 3
-CRED_L4 EQU 07000h+59*32+5		; 22 chars, cell 5
-
 vz_title_draw:
-	call	06012h
+	call	06012h			; the original draw (HL = screen list)
+	push	hl
+	ld	hl, cred_p1
+	call	vz_credits_page
+	ld	a, (vz_margin_dirty)
+	or	1
+	ld	(vz_margin_dirty), a
+	pop	hl
+	ret
+
+; vz_title_wait: same two passes of 65536 key polls as sub_c9eeh (B = 2 on entry),
+; same return convention (NZ + A = key, or Z + A = 0 on timeout), with the pages
+; flipped on the way.  The poll loop has the same instructions as the original.
+vz_title_wait:
+	ld	hl, cred_p2
+	call	vz_credits_page
+	ld	de, 0
+vtw_poll:
+	call	0c9fdh			; sub_c9fdh: the key poll (patched to vz_check_fire)
+	ret	nz
+	dec	de
+	ld	a, e
+	or	d
+	jr	nz, vtw_poll
+	ld	a, b			; end of a pass: after the first one (B = 2) show page 3
+	cp	2
+	jr	nz, vtw_next
+	ld	hl, cred_p3
+	call	vz_credits_page
+vtw_next:
+	djnz	vtw_poll
+	xor	a			; timed out: Z, A = 0 like the original
+	ret
+
+; vz_credits_page: HL = page (word pairs: row base address, string; ended by 0).
+; Blanks rows 41-63 first, then draws every line centred.  Preserves all registers.
+vz_credits_page:
 	push	af
 	push	bc
 	push	de
 	push	hl
-	ld	de, CRED_L1
-	ld	hl, cred_s1
-	call	vz_puts3
-	ld	de, CRED_L2
-	ld	hl, cred_s2
-	call	vz_puts3
-	ld	de, CRED_L3
-	ld	hl, cred_s3
-	call	vz_puts3
-	ld	de, CRED_L4
-	ld	hl, cred_s4
-	call	vz_puts3
-	ld	a, (vz_margin_dirty)
-	or	1
-	ld	(vz_margin_dirty), a
+	push	hl
+	ld	hl, 07000h+41*32
+	ld	de, 07000h+41*32+1
+	ld	bc, 23*32-1
+	ld	(hl), 0
+	ldir
+	pop	hl
+vcp_line:
+	ld	e, (hl)
+	inc	hl
+	ld	d, (hl)
+	inc	hl
+	ld	a, d
+	or	e
+	jr	z, vcp_done
+	ld	c, (hl)
+	inc	hl
+	ld	b, (hl)
+	inc	hl
+	push	hl
+	ld	h, b
+	ld	l, c
+	call	vz_puts3c
+	pop	hl
+	jr	vcp_line
+vcp_done:
 	pop	hl
 	pop	de
 	pop	bc
 	pop	af
 	ret
 
+; vz_puts3c: draw the zero-terminated string at HL centred on the 32-cell line
+; whose first cell is at DE.  Destroys AF, BC, DE, HL.
+vz_puts3c:
+	push	hl
+	ld	b, 0
+vpc_len:
+	ld	a, (hl)
+	or	a
+	jr	z, vpc_go
+	inc	hl
+	inc	b
+	jr	vpc_len
+vpc_go:
+	ld	a, 32
+	sub	b
+	srl	a			; (32 - length) / 2
+	add	a, e
+	ld	e, a
+	jr	nc, vpc_nc
+	inc	d
+vpc_nc:
+	pop	hl
+	jp	vz_puts3
+
+; pages: lines are 6 rows apart; three lines start on row 44, two on row 47
+cred_p1:	defw	07000h+44*32, cred_s1, 07000h+50*32, cred_s2, 07000h+56*32, cred_s3, 0
+cred_p2:	defw	07000h+44*32, cred_s4, 07000h+50*32, cred_s5, 07000h+56*32, cred_s6, 0
+cred_p3:	defw	07000h+47*32, cred_s7, 07000h+53*32, cred_s8, 0
+
 ; vz_margin_clear: blank both 8-row margins (rows 0-7 = 7000h-70FFh, rows 56-63 =
 ; 7700h-77FFh), which the screen blit never touches, and clear the flags.
 ; The flag byte vz_margin_dirty: bit 0 = title credits drawn, bit 1 = gameplay HUD
 ; drawn (set by vz_draw_hud_row, dropped again by vz_blit_site1 every frame).
+; Bit 0 also covers the game-over summary (vz_gameover_blit).
 ; Preserves HL; destroys AF, BC, DE.
 vz_margin_clear:
 	push	hl
@@ -1262,5 +1402,257 @@ cred_s1:	defm	"(C) 1983 BRYAN EGGERS AND", 0
 cred_s2:	defm	"LARRY PAYNE", 0
 cred_s3:	defm	"MUSIC AND SOUND BY FANFARE", 0
 cred_s4:	defm	"(C) 1982 JON BOKELMAN.", 0
+cred_s5:	defb	34, "13 GHOSTS", 34, " AND ", 34, "FANFARE", 34, " ARE", 0	; "13 GHOSTS" AND "FANFARE" ARE
+cred_s6:	defm	"TRADEMARKS OF SOFTWARE AFFAIR.", 0
+cred_s7:	defm	"LICENSED TO TANDY CORPORATION -", 0
+cred_s8:	defm	"ALL RIGHTS RESERVED.", 0
+
+; ---------------------------------------------------------------------------
+; Game-over summary.  sub_5b6dh builds "Final Score / score", "Ghost: n" and
+; "Level: n" as TRS-80 text in rows 12-13 of buffer 0 (0CD12h = row 12), then
+; copies rows 12-15 to the TRS-80 screen (3F00h).  Patched in at 0x5BA2,
+; replacing that `ld de,3F00h / ld bc,0100h / ldir`; HL = 0CD12h.
+;   1. vz_blit_rows4 draws rows 12-15 (the skull's jaw / GAME OVER banner;
+;      the text cells are bit-7-clear, so they come out blank);
+;   2. the summary is redrawn in 3x5 in the free margins, reading the live
+;      digits out of the buffer the game just filled in:
+;        top margin    (row 2, cell 5):   FINAL SCORE ddddddddd
+;        bottom margin (row 57, cell 6):  LEVEL dd  GHOSTS dd
+; The game-over loop calls this ten times (banner and plain skull alternate);
+; the text is identical every time.  Bit 0 of vz_margin_dirty keeps it until the
+; next screen that is not gameplay wipes the margins.
+; Buffer offsets from 0CD12h: score +67 (9 chars), ghost digits +57/+58,
+; level digits +121/+122.
+; ---------------------------------------------------------------------------
+GO_LINE1 EQU 07000h+2*32+5
+GO_LINE2 EQU 07000h+57*32+6
+
+vz_gameover_blit:
+	push	af
+	push	bc
+	push	de
+	push	hl
+	push	ix
+	push	hl
+	pop	ix			; IX = buffer row 12
+	call	vz_blit_rows4		; (preserves HL)
+	ld	de, GO_LINE1
+	ld	hl, go_s_final
+	call	vz_puts3
+	push	ix
+	pop	hl
+	ld	bc, 67
+	add	hl, bc			; HL = score field
+	ld	b, 9
+go_score:
+	ld	a, (hl)
+	inc	hl
+	call	vz_draw3
+	djnz	go_score
+	ld	de, GO_LINE2
+	ld	hl, go_s_level
+	call	vz_puts3
+	ld	a, (ix+121)
+	call	vz_draw3
+	ld	a, (ix+122)
+	call	vz_draw3
+	ld	hl, go_s_ghosts
+	call	vz_puts3
+	ld	a, (ix+57)
+	call	vz_draw3
+	ld	a, (ix+58)
+	call	vz_draw3
+	ld	a, (vz_margin_dirty)
+	or	1
+	ld	(vz_margin_dirty), a
+	pop	ix
+	pop	hl
+	pop	de
+	pop	bc
+	pop	af
+	ret
+
+go_s_final:	defm	"FINAL SCORE ", 0
+go_s_level:	defm	"LEVEL ", 0
+go_s_ghosts:	defm	"  GHOSTS ", 0
+
+; ---------------------------------------------------------------------------
+; High scores.
+;
+; The table (game data, not moved) is 10 entries x 24 bytes at HS_TABLE: a
+; 15-character name followed by the 9-character score field.  Names are now
+; entered as 3 letters, so only the first 3 name characters are used/shown.
+;
+; Name entry (sub_5b2eh) used to type straight into TRS-80 video RAM at
+; 3EE9h-3EF7h, which is ROM on the VZ.  The reads/writes now use NAME_BUF
+; (0x5B2E, 0x5AAF), the limit is NAME_BUF+3 (0x5B5B), and the cursor store at
+; 0x5B31 calls vz_name_cursor, which draws "TYPE YOUR NAME, THEN RETURN" and the
+; three letters (typed ones, '_' for the rest) over the GREAT SCORE screen.
+; ---------------------------------------------------------------------------
+HS_TABLE EQU 0634Bh
+NAME_PROMPT_ADDR EQU 07000h+41*32+2	; 27 cells (2-28)
+NAME_FIELD_ADDR  EQU 07000h+49*32+14	; 3 cells (14-16)
+
+; vz_name_cursor: replaces `ld (hl),8Fh / call sub_603ah` at 0x5B31.  HL = the
+; cursor position in NAME_BUF.  Preserves everything the caller needs.
+vz_name_cursor:
+	push	af
+	push	bc
+	push	de
+	push	hl
+	ld	de, NAME_BUF
+	or	a
+	sbc	hl, de			; HL = letters typed so far
+	jr	nz, vnc_draw
+	ld	hl, NAME_BUF		; first call (or restart): blank the buffer
+	ld	b, 15
+vnc_blank:
+	ld	(hl), 020h
+	inc	hl
+	djnz	vnc_blank
+	ld	hl, 0
+vnc_draw:
+	ld	c, l			; C = letters typed
+	ld	de, NAME_PROMPT_ADDR
+	ld	hl, nm_s_prompt
+	call	vz_puts3
+	ld	de, NAME_FIELD_ADDR
+	ld	hl, NAME_BUF
+	ld	b, 3
+vnc_ch:
+	ld	a, 3
+	sub	b			; A = slot 0..2
+	cp	c
+	ld	a, '_'
+	jr	nc, vnc_put		; not typed yet: placeholder
+	ld	a, (hl)
+vnc_put:
+	call	vz_draw3
+	inc	hl
+	djnz	vnc_ch
+	pop	hl
+	ld	(hl), 08fh		; the original cursor store
+	pop	de
+	pop	bc
+	pop	af
+	jp	0603ah			; the original call: wait for key release (returns to our caller)
+
+nm_s_prompt:	defm	"TYPE YOUR NAME, THEN RETURN", 0
+
+; ---------------------------------------------------------------------------
+; vz_hs_blit: replaces the buffer->screen copy at 0x5AFD in sub_5ae1h (HL =
+; 0CA12h, the decoded screen 38).  Draws the screen, then the table from
+; HS_TABLE as two columns of five lines (rows 33-61, ink rows 33-37, 39-43,
+; ..., 57-61); each line is 15 cells:   rr nnn ssssssss   (rank right-aligned
+; in 2, 3 name letters, the LOW 8 of the score field's 9 characters).  The top
+; character (hundreds of millions) is blank unless the score is out of range
+; (>= 100,000,000, practically unreachable): then the 8 cells show " BUSTER!").
+; A '*' in that first character is the game's winner marker: it is drawn in the
+; first blank cell of the 8 instead.
+; Left column cells 0-14, a 2-cell gutter, right column cells 17-31.  The screen's own text
+; (header, ranks, names) is bit-7-clear and came out blank.  Row 38 holds the
+; header underline of screen 38, which would cut through the first lines: cleared.
+; Lines 57-61 sit in the bottom margin, so bit 0 of vz_margin_dirty is set.
+; ---------------------------------------------------------------------------
+vz_hs_blit:
+	push	af
+	push	bc
+	push	de
+	push	hl
+	push	ix
+	push	iy
+	call	vz_blit_frame		; (preserves all)
+	ld	hl, 07000h+38*32
+	ld	de, 07000h+38*32+1
+	ld	bc, 31
+	ld	(hl), 0
+	ldir
+	ld	ix, HS_TABLE
+	ld	iy, hs_dst
+	ld	b, 10			; entries left
+	ld	c, 1			; rank
+hs_ent:
+	ld	e, (iy+0)
+	ld	d, (iy+1)
+	inc	iy
+	inc	iy
+	ld	a, c
+	cp	10
+	jr	z, hs_ten
+	ld	a, ' '
+	call	vz_draw3
+	ld	a, c
+	add	a, '0'
+	call	vz_draw3
+	jr	hs_name
+hs_ten:
+	ld	a, '1'
+	call	vz_draw3
+	ld	a, '0'
+	call	vz_draw3
+hs_name:
+	ld	a, ' '
+	call	vz_draw3
+	ld	a, (ix+0)
+	call	vz_draw3
+	ld	a, (ix+1)
+	call	vz_draw3
+	ld	a, (ix+2)
+	call	vz_draw3
+	ld	a, ' '
+	call	vz_draw3
+	ld	a, (ix+15)		; first character of the 9-character score field
+	cp	' '
+	jr	z, hs_num		; blank: the score fits the 8 shown characters
+	cp	'*'
+	jr	z, hs_num		; '*' = the game's winner marker (see vz_win_row), not a digit
+	ld	hl, hs_s_buster		; a digit: >= 100,000,000, out of range, show the string instead
+	call	vz_puts3
+	jr	hs_next
+hs_num:
+	push	ix
+	pop	hl
+	push	bc
+	ld	bc, 16
+	add	hl, bc			; HL = score field + 1 (low 8 of the 9 characters)
+	ld	b, 8
+	ld	a, (ix+15)
+	cp	'*'
+	jr	nz, hs_score
+	ld	a, (hl)			; winner: put the star in the first blank cell of the score
+	cp	' '
+	jr	nz, hs_score
+	ld	a, '*'
+	call	vz_draw3
+	inc	hl
+	dec	b
+hs_score:
+	ld	a, (hl)
+	inc	hl
+	call	vz_draw3
+	djnz	hs_score
+	pop	bc
+hs_next:
+	ld	de, 24
+	add	ix, de
+	inc	c
+	dec	b			; (djnz is out of range now: the loop body grew)
+	jp	nz, hs_ent
+	ld	a, (vz_margin_dirty)
+	or	1
+	ld	(vz_margin_dirty), a
+	pop	iy
+	pop	ix
+	pop	hl
+	pop	de
+	pop	bc
+	pop	af
+	ret
+
+; destination of each entry's first cell: left column (entries 1-5), right column (6-10)
+hs_s_buster:	defm	" BUSTER!", 0
+
+hs_dst:	defw	07000h+33*32, 07000h+39*32, 07000h+45*32, 07000h+51*32, 07000h+57*32
+	defw	07000h+33*32+17, 07000h+39*32+17, 07000h+45*32+17, 07000h+51*32+17, 07000h+57*32+17
 
 ; End of HAL

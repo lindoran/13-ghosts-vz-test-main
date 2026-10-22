@@ -93,10 +93,14 @@ so it can no longer mute the game by accident. The extra direction keys (`X`, `Z
 | `stage1.asm` | The bootstrap (12 bytes): bank 0 + RAM in the 4000-67FF window, then call the ROM's `TAPE_LOAD_COMMON` to load the next file. |
 | `Makefile` | The build chain. `make` → `assets/ghost13_two_stage.wav`, `prod/ghost13_fast.wav`, and `prod/ghost13_fast_inv.wav` (stage1 + 3 parts each). |
 | `splice_wav.py` | Concatenates the per-file WAVs into the final tape image. Generic — works for any number of same-format WAV segments. |
-| `gen_blit.py` | Regenerates the `vz_blit_frame` / `vz_build_blit_tables` block in `hal_vz.asm` (table-driven, 32-pair unrolled, ~22 ms/frame). Edit the generator, not the generated block. |
+| `gen_blit.py` | Regenerates the `vz_blit_frame` / `vz_blit_rows4` / `vz_build_blit_tables` block in `hal_vz.asm` (table-driven, 32-pair unrolled, ~22 ms/frame for the full screen; `vz_blit_rows4` draws only the bottom four character rows). The margin-wipe check at the top of both entry points lives here too: edit the generator, not the generated block, or the next run erases your change. |
 | `verify_blit.py` | Runs the new blit and a baseline build's original bit-twiddling blit on identical buffers in the Z80 emulator and compares VRAM byte for byte. Usage: `verify_blit.py [BASELINE_DIR]` (dir holding the old `ghost13_ram.bin` + `ghost13_hal.map`). |
 | `verify_hud3.py` | Runs the real `vz_boot` + `vz_draw_hud_row` in a Z80 emulator: checks the 3x5 font cache (all 64 glyphs) and the HUD (score, level name, level, ghosts) byte for byte against an independent render of `font_3x5.asm`, and exercises the game's own score-add routine (`0x5780`) to bound the score field. Writes `hud3_render.png`. |
-| `verify_title.py` | Runs the *real game* from its entry point to the title screen's final draw (`0x5396`) and checks the credits against an independent render, then checks the margin wipe on the next blit. Writes `title_render.png`. |
+| `verify_title.py` | Runs the *real game* from its entry point to the title screen's final draw (`0x5396`) and checks credits page 1 against an independent render, then checks the margin wipe on the next blit. Writes `title_render.png`. |
+| `verify_credit_pages.py` | Runs the real title sequence (slide-in, final draw, the whole tune) and then the real idle wait: checks each credits page against an independent render, that the wait takes the same time as the original `sub_c9eeh` (within 1%) and returns the same flags, the key-pressed path, and the margin wipe. Writes `credit_pages_render.png`. |
+| `verify_win.py` | Runs the game's real win path (`0x568B`: screen 39, the HUD row template with the level name and the `*` winner marker) up to the patched copy at `0x56A7` and checks the 3x5 status row against an independent render of that template. Writes `win_render.png`. |
+| `verify_highscores.py` | Runs the real game to the title, then the game's own name-entry routine (keys fed from a queue; only the key wait, music and release-wait helpers are stubbed): checks the prompt and the three name slots after every keystroke, the 3-letter limit, three real insertions through the game's table-shift code (`0x5A49`), and the table screen against an independent render. Writes `highscores_render.png`. |
+| `verify_gameover.py` | Runs the real game to the title, then replays the game-over sequence (`0x5A0C-0x5A3B`) with the game's own decode and summary routines for both halves of the skull flash; checks rows 44-55 against an independent semigraphics conversion, that nothing else in the playfield is touched, and the margin summary against an independent render. Writes `gameover_render.png`. |
 | `verify_margins.py` | Checks the HUD / credits margin cleanup: the gameplay blit must not wipe the HUD (no flicker); any other blit must wipe both margins; a pending credits wipe must still happen on the first gameplay blit. |
 
 `verify_font_cache.py` and `verify_hud_render.py` test the old 8x8 font cache and HUD, which the 3x5 text renderer replaced; they no longer match the build.
@@ -147,7 +151,8 @@ Memory map after loading, original addresses unless noted: `4000` stub,
 `4050-51FF` screens C, `5200-644A` game, `644B-67FF` screens A, `6800-77FF` VZ200
 I/O + video RAM, `7AE8` stub, `7AF0-886B` screens B, `886C-CA05` game,
 `CA12-E411` game buffers/table (runtime), `E420` replacement routines, `F400`
-3x5 font cache (320 bytes), stack from `FFFF`.
+3x5 font cache (320 bytes), `F540` name-entry buffer (15 bytes), `F600-FBFF`
+blit lookup tables (6 pages), stack from `FFFF`.
 
 ## Text rendering (3x5 font)
 
@@ -164,26 +169,27 @@ upper-cases.
 |---|---|---|
 | Top margin (rows 0-7, ink rows 2-6, cells 7-23) | The 17-character level-name field of the game's HUD row (`DDE8h`), exactly as the game holds it, no label | `vz_draw_hud_row`, called from `vz_blit_site1` every gameplay frame |
 | Bottom margin (rows 56-63, ink rows 57-61) | `SCORE ddddddddd LEVEL dd GH dd`: the whole 9-character score field (cols 8-16, the ones digit is never incremented), level, ghosts | same |
-| Bottom of the title (rows 41-63) | Four centred credit lines, condensed from the original credits (the trademark and licence lines are omitted for now) | `vz_title_draw`, patched in at `0x5396` (the title's final static draw, after the logo has slid into place) |
+| Game over (top margin row 2, bottom margin row 57) | `FINAL SCORE ddddddddd` above the skull, `LEVEL dd  GHOSTS dd` below it, read from the buffer the game's `sub_5B6D` fills in. The skull's lower rows (12-15) are drawn by `vz_blit_rows4` | `vz_gameover_blit`, patched in at `0x5BA2` (replaces the copy to `3F00h`) |
+| Win screen (screen 39) | The game's HUD row template (`61D5h`) as the usual two margin lines: level name `13 GHOSTS` on top, `SCORE *dddddddd LEVEL dd GH dd` below (the `*` is the winner marker the game puts in the first character of the score field) | `vz_win_row`, patched in at `0x56A7` (replaces the copy to `3FC0h`); shares `vz_hud_from_ix` with the gameplay HUD |
+| Name entry (screen 37), rows 41-53 | `TYPE YOUR NAME, THEN RETURN` and three slots (`AB_`); names are **3 letters** now | `vz_name_cursor`, patched in at `0x5B31`; the typed name lives in `NAME_BUF` (`F540h`) instead of TRS-80 video RAM `3EE9h` (`0x5B2E`, `0x5AAF`, limit at `0x5B5B`) |
+| High-score table (screen 38), rows 33-61 | Two columns of five lines, `rr nnn ssssssss` (rank, first 3 name characters, low 8 of the score field's 9 characters; a score of 100,000,000 or more, which should be unreachable, shows ` BUSTER!` instead; the game's `*` winner marker is drawn in the first blank cell of the score), 2-cell gutter; the screen's header underline (row 38) is cleared | `vz_hs_blit`, patched in at `0x5AFD` (inside `sub_5AE1`, used both after name entry and from the attract loop) |
+| Title credits (rows 41-63, under the logo) | The full original credit text as **three pages** of up to three centred lines: page 1 after the slide-in (through the tune), page 2 when the idle wait for a key starts, page 3 after that wait's first pass (~2.8 s). The music engine is cycle-counted and is not touched; nothing is drawn while it plays | `vz_title_draw`, patched in at `0x5396` (the title's final static draw), and `vz_title_wait`, patched in at `0x53FF` in place of `call sub_c9eeh` (same polls, same ~5.6 s, same return convention) |
 
 The HUD and credits live in the 8-row margins above and below the 48-row
 playfield, which the screen blit never touches, so they would stay on screen
 after the game moves on.  `vz_margin_dirty` handles that: `vz_draw_hud_row` sets
-bit 1, `vz_title_draw` sets bit 0, and the next `vz_blit_frame` that is **not**
+bit 1, `vz_title_draw` and `vz_gameover_blit` set bit 0, and the next `vz_blit_frame` that is **not**
 the gameplay one (game over, demo end, any other screen) wipes both margins
 first.  `vz_blit_site1` drops the HUD bit before each gameplay blit so the HUD is
 never wiped (and flickers) mid-game, but leaves the credits bit so the first
 gameplay frame removes the title credits.  `verify_margins.py` checks this.
 
+Game over: `sub_5B6D` writes `Final Score` (row 12, cols 2-12), the 9-character score (row 13, cols 3-11), `Ghost:  n` (row 12, cols 50-58) and `Level:  n` (row 13, cols 50-58) into rows 12-13 of buffer 0, then copies rows 12-15 to the screen.  The loop at `0x5A12` runs ten times, alternating the skull with the GAME OVER banner (screen 35) and the plain skull (screen 1E).  Only those four rows are redrawn each time; the rows above keep the last animation frame (screen 1D).
+
 Not covered yet (all character-mode text the semigraphics blitter drops, or
 direct TRS-80 video RAM access):
-* the title's trademark / licence lines;
-* the name-entry prompt (screen `37`) and the high-score table (screen `38`);
-* the high-score name entry reads and writes the TRS-80 video RAM at
-  `3EE9h-3EF7h` directly (not patched); on the VZ that range is ROM, so a typed
-  name cannot be stored;
-* the game-over summary (`sub_5B6D`: "Final Score / Level / Ghost") is copied to
-  `3F00h` (rows 12-15) at `0x5BA2` and is not patched, so it never appears;
+* name entry has no backspace: any control character restarts the entry (the
+  game's own behaviour), so a typo means starting over;
 * the start-of-game HUD row is written straight to `3FC0h` at `0x56A7`
   (not patched).
 
