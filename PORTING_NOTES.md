@@ -28,7 +28,7 @@ type-tagged records, not a flat binary:
 ```
 
 Both files are ~120 sequential 256-byte object blocks. I wrote a small
-parser (`cmd_tools.py`, included) that walks the records and reassembles a
+parser (`tools/cmd_tools.py`, included) that walks the records and reassembles a
 flat memory image:
 
 | File | Object blocks | Load span | Entry point |
@@ -98,7 +98,7 @@ it's self-contained.
 - `ghost13a.asm` / `ghost13b.asm` — full z80dasm listing (labels, hex,
   addresses) for each variant
 - `ghost13a.sym` / `ghost13b.sym` — label/symbol tables z80dasm generated
-- `cmd_tools.py` — the CMD-record parser + flat-image extractor, in case
+- `tools/cmd_tools.py` — the CMD-record parser + flat-image extractor, in case
   you want to re-run it against other Model I/III `.cmd` dumps
 
 ## Suggested next steps for the VZ200 port

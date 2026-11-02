@@ -56,7 +56,7 @@ FAST_FLAGS     ?= --fast --fast-vram
 FAST_PART_WAV     = $(addprefix $(ASSETS_DIR)/,$(addsuffix _fast.wav,$(PARTS)))
 FAST_INV_PART_WAV = $(addprefix $(ASSETS_DIR)/,$(addsuffix _fast_inv.wav,$(PARTS)))
 
-.PHONY: all standard fast fast-inv stage1 parts clean
+.PHONY: all standard fast fast-inv stage1 parts sd clean
 
 $(ASSETS_DIR) $(PROD_DIR):
 	mkdir -p $@
@@ -117,6 +117,17 @@ $(FAST_WAV): $(STAGE1_WAV) $(FAST_PART_WAV)
 
 $(FAST_INV_WAV): $(STAGE1_WAV) $(FAST_INV_PART_WAV)
 	$(PYTHON) splice_wav.py $(STAGE1_WAV) $(FAST_INV_PART_WAV) $(FAST_INV_WAV)
+
+# Benn Venn SD Loader card files: prod/sd/13GHOSTS.VZ + 13GHOST1..n.DAT (every file <= 31,200 bytes);
+# see sd/SD_LOADER.md.  Optional emulator check (real VZDOS in the SD Loader emulator):
+#   make sd SD_EMU=/path/to/VZ200-Emulator-master SD_DOS=/path/to/VZDOS.VZ
+SD_ROM ?= VZ200_basic_ROM_listing/refrence_rom.bin
+sd: $(PART_VZ)
+	$(PYTHON) sd/make_sd.py
+	@if [ -n "$(SD_DOS)" ]; then cp "$(SD_DOS)" prod/sd/VZDOS.VZ; echo "sd: copied $(SD_DOS) -> prod/sd/VZDOS.VZ"; \
+	else echo "sd: WARNING - no SD_DOS given; the card needs VZDOS.VZ in its root or the loader prints NOT FOUND at boot"; fi
+	@if [ -n "$(SD_EMU)" ] && [ -n "$(SD_DOS)" ]; then $(PYTHON) sd/verify_sdload.py $(SD_EMU) $(SD_ROM) $(SD_DOS); \
+	else echo "sd: emulator check skipped (set SD_EMU and SD_DOS to run it)"; fi
 
 clean:
 	rm -f $(ASSETS_DIR)/stage1.bin $(ASSETS_DIR)/stage1.vz $(ASSETS_DIR)/stage1.wav \
