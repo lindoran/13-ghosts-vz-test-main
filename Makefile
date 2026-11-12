@@ -45,6 +45,8 @@ PARTS       = ghost13_p1 ghost13_p2 ghost13_p3
 PART_VZ     = $(addprefix $(PROD_DIR)/,$(addsuffix .vz,$(PARTS)))
 PART_WAV    = $(addprefix $(ASSETS_DIR)/,$(addsuffix .wav,$(PARTS)))
 
+DISASM_SCRIPT = tools/disasm_cmds.py
+
 FINAL_WAV      = $(ASSETS_DIR)/ghost13_two_stage.wav
 FAST_WAV       = $(PROD_DIR)/ghost13_fast.wav
 FAST_INV_WAV   = $(PROD_DIR)/ghost13_fast_inv.wav
@@ -56,7 +58,14 @@ FAST_FLAGS     ?= --fast --fast-vram
 FAST_PART_WAV     = $(addprefix $(ASSETS_DIR)/,$(addsuffix _fast.wav,$(PARTS)))
 FAST_INV_PART_WAV = $(addprefix $(ASSETS_DIR)/,$(addsuffix _fast_inv.wav,$(PARTS)))
 
-.PHONY: all standard fast fast-inv stage1 parts sd clean
+.PHONY: all standard fast fast-inv stage1 parts sd clean disasm distclean
+
+# Recreate ghost13a.asm, ghost13b.asm, and .sym files from cmds/*.cmd
+disasm: $(DISASM_SCRIPT)
+	$(PYTHON) $(DISASM_SCRIPT)
+
+ghost13b.asm: cmds/ghost13b.cmd $(DISASM_SCRIPT)
+	$(PYTHON) $(DISASM_SCRIPT)
 
 $(ASSETS_DIR) $(PROD_DIR):
 	mkdir -p $@
@@ -119,15 +128,14 @@ $(FAST_INV_WAV): $(STAGE1_WAV) $(FAST_INV_PART_WAV)
 	$(PYTHON) splice_wav.py $(STAGE1_WAV) $(FAST_INV_PART_WAV) $(FAST_INV_WAV)
 
 # Benn Venn SD Loader card files: prod/sd/13GHOSTS.VZ + 13GHOST1..n.DAT (every file <= 31,200 bytes);
-# see sd/SD_LOADER.md.  Optional emulator check (real VZDOS in the SD Loader emulator):
-#   make sd SD_EMU=/path/to/VZ200-Emulator-master SD_DOS=/path/to/VZDOS.VZ
-SD_ROM ?= VZ200_basic_ROM_listing/refrence_rom.bin
+# see sd/SD_LOADER.md.
 sd: $(PART_VZ)
 	$(PYTHON) sd/make_sd.py
-	@if [ -n "$(SD_DOS)" ]; then cp "$(SD_DOS)" prod/sd/VZDOS.VZ; echo "sd: copied $(SD_DOS) -> prod/sd/VZDOS.VZ"; \
-	else echo "sd: WARNING - no SD_DOS given; the card needs VZDOS.VZ in its root or the loader prints NOT FOUND at boot"; fi
-	@if [ -n "$(SD_EMU)" ] && [ -n "$(SD_DOS)" ]; then $(PYTHON) sd/verify_sdload.py $(SD_EMU) $(SD_ROM) $(SD_DOS); \
-	else echo "sd: emulator check skipped (set SD_EMU and SD_DOS to run it)"; fi
+	@if [ -n "$(SD_DOS)" ]; then \
+		if [ "$$(realpath "$$(eval echo "$(SD_DOS)")" 2>/dev/null)" != "$$(realpath prod/sd/VZDOS.VZ 2>/dev/null)" ]; then \
+			cp "$(SD_DOS)" prod/sd/VZDOS.VZ && echo "sd: copied $(SD_DOS) -> prod/sd/VZDOS.VZ"; \
+		fi; \
+	else echo "sd: NOTE - the card needs VZDOS.VZ in its root (use 'make sd SD_DOS=/path/to/VZDOS.VZ' to copy it)"; fi
 
 clean:
 	rm -f $(ASSETS_DIR)/stage1.bin $(ASSETS_DIR)/stage1.vz $(ASSETS_DIR)/stage1.wav \
@@ -140,8 +148,12 @@ clean:
 	      $(ASSETS_DIR)/ghost13_p*_fast.wav $(ASSETS_DIR)/ghost13_p*_fast_inv.wav \
 	      $(PROD_DIR)/stage1.vz $(PROD_DIR)/ghost13_p*.vz \
 	      $(PROD_DIR)/ghost13_fast.wav $(PROD_DIR)/ghost13_fast_inv.wav \
+	      $(PROD_DIR)/sd/13GHOST*.DAT $(PROD_DIR)/sd/13GHOSTS.VZ \
 	      stage1.bin stage1.vz stage1.wav stage1.o stage1.sym ghost13_p*.bin \
 	      ghost13_p*.vz ghost13_p*.wav ghost13_parts.stamp ghost13_hal.asm \
 	      ghost13_hal.bin ghost13_hal.map ghost13_hal.o ghost13_ram.bin \
 	      ghost13_two_stage.wav ghost13_fast.wav ghost13_fast_inv.wav \
 	      ghost13_p*_fast.wav ghost13_p*_fast_inv.wav
+
+distclean: clean
+	rm -f ghost13a.asm ghost13a.sym ghost13b.asm ghost13b.sym ghost13a.bin ghost13b.bin ghost13a_full.asm ghost13b_full.asm

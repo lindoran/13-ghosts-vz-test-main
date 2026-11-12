@@ -1,2 +1,18 @@
 /assets/
 /prod/
+__pycache__/
+*.pyc
+
+# TRS-80 original CMD files (README.md persists)
+/cmds/*
+!/cmds/README.md
+
+# Generated disassembly assets
+/ghost13a.asm
+/ghost13a.sym
+/ghost13b.asm
+/ghost13b.sym
+/ghost13a.bin
+/ghost13b.bin
+/ghost13a_full.asm
+/ghost13b_full.asm

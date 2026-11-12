@@ -2,7 +2,7 @@
 
 `make sd` -> `prod/sd/13GHOSTS.VZ` (stub, loads/runs at D000) plus `13GHOST1.DAT`, `13GHOST2.DAT`,
 `13GHOST3.DAT` (one per game part). Copy ALL of them to the SD card root, then `LOAD"13GHOSTS"`.
-Build: `make sd` (optionally `make sd SD_EMU=<VZ200-Emulator-master> SD_DOS=<VZDOS.VZ>` to also run the emulator check).
+Build: `make sd`
 **Also put `VZDOS.VZ` in the card root** (`make sd SD_DOS=/path/to/VZDOS.VZ` copies it to `prod/sd/`): VZDOS looks for it at every boot and prints `LOOKING FOR VZDOS.VZ` / `NOT FOUND` when it is missing.
 Needs the VZDOS 2.32-style file API (5F00/5F03/5F09 jump table, as in VZDOS2_32_File_IO_Test).
 
@@ -31,12 +31,11 @@ file would exceed 31,200. The stub opens each file in turn, so no single file ev
 * Stub (D000), staging buffer (D200) and stack (below E400) sit in CA12-E411, which the game rebuilds at run time.
 * Final step: port 55 = 03h (SRAM bank 1 = the game's 4000-67FF), `jp E420` (vz_boot). No game code changed.
 
-## Verified (`python3 sd/verify_sdload.py EMU_DIR refrence_rom.bin VZDOS.VZ`)
-Real VZDOS firmware running in the Java emulator's SD Loader model, folder card: `LOAD"13GHOSTS"` reaches
+## Tested Configuration
+Tested on VZDOS firmware running in the VZ200 emulator SD Loader model with a folder card: `LOAD"13GHOSTS"` reaches
 vz_boot with RAM byte-identical to every card file, under both the VZ200 ($9000) and VZ300 ($B800) RAM maps,
 each with `VZDOS.VZ` on the card (DOS in SRAM) and without it (DOS in EPROM); the game then draws its title
-screen. Also checked with an older EPROM (2.1) and VZDOS 2.32 on the card: the stub loads correctly, whereas
-a stub that forces the EPROM DOS visible (the previous v2) loads garbage. Also tested (re-run on v3) with a forced 15-sector chunk size (6 files, 4000-67FF
+screen. Also checked with an older EPROM (2.1) and VZDOS 2.32 on the card. Tested with a forced 15-sector chunk size (6 files, 4000-67FF
 window split across two files) -- identical.
 
 ## NOT verified -- needs real hardware

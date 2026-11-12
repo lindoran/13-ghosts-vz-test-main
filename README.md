@@ -1,212 +1,147 @@
-# 13 Ghosts — TRS-80 → VZ200 Port
+# 13 Ghosts — TRS-80 to VZ200 / RC39 Port Patcher
 
-Porting the 1982 TRS-80 game *13 Ghosts* (Software Affair) to the VZ200 /
-RC39 Backplane Clone (Z80, MC6847 Mode 1). This README is a map of the
-repository — what's current, what's historical, and how to build the
-final tape image.
+Welcome to the **13 Ghosts** port for the VTech (Dick Smith) VZ200 / VZ300 and the RC39 HB200 Backplane System!
 
-## Architecture (v8: patch in place, do not relocate)
+Originally created by Berta Eggers and Larry Payne and published in 1982 by Software Affair / Radio Shack, *13 Ghosts* is a classic arcade-style shooting gallery game originally developed for the TRS-80 Model I and III. You find yourself in a haunted shooting gallery, picking off restless spirits, dodging attacks, and trying to survive 13 increasingly frantic waves of ghosts.
 
-The game stays **byte for byte at its original TRS-80 addresses**
-(`0x5200-0xCA05`).  `port_13ghosts_v8.py` rebuilds the original binary from
-`ghost13b.asm`, patches about 25 TRS-80-specific instructions in place (video
-copies, keyboard, sound, TRSDOS) so they call into `hal_vz.asm` (the VZ200/RC39
-replacement routines), and writes three tape files.  Nothing else changes.
-
-Earlier versions (v1-v7, now in `archive/`) disassembled the binary, shifted it
-to `0x7AE8` and re-assembled it with symbolic labels.  That cannot work reliably
-from a linear disassembly: level data was relocated as if it were code, byte
-pairs used as opcodes by the day/night patch were relocated as if they were
-addresses, and the animation/sprite tables - which hold absolute TRS-80
-addresses - could not be relocated at all.  Keeping the original addresses
-removes that whole class of bugs.
-
-The one thing that has to move is the block of 34 compressed screens
-(`0x644B-0x886B`): it sits exactly on the VZ200's I/O + video RAM
-(`0x6800-0x77FF`).  The screens are position-independent (the game finds them
-through a table it builds at start-up), so the patcher splits them into pieces
-that fit the free RAM and the table is filled from a generated list instead
-of by the game's scan.  See the docstring of `port_13ghosts_v8.py` for the map.
-
-The tape has **four files**: `stage1` (forces bank 0 + 10K RAM window, loads the
-next file through the VZ200 ROM loader), part 1 (`0x4000-0x67FF`), part 2
-(`0x7AE8-0xCA05`), part 3 (`0xE420`, the replacement routines; its start address
-`vz_boot` jumps into the game).  Parts 1 and 2 begin with an 8-byte stub that
-loads the following file.  Their WAVs are concatenated into one tape.
-
-## Quick start
-
-```
-make VZPACK=/path/to/vzpack VZ2WAV=/path/to/vz2wav
-```
-
-Produces three tapes, all with the same stage 1 and the same three parts:
-
-| Target | File | Use |
-|---|---|---|
-| `make standard` | `assets/ghost13_two_stage.wav` | normal-speed ROM-format tape (~476 s) |
-| `make fast` | `prod/ghost13_fast.wav` | fast loader, normal phase: stock VZ200 and emulators (~103 s) |
-| `make fast-inv` | `prod/ghost13_fast_inv.wav` | fast loader, inverted phase (`--fast-invert`): machines whose tape input inverts the signal, e.g. the RC39/HB200 homebrew (~103 s) |
-
-Plain `make` builds all three. The fast tapes encode each part with
-`vz2wav --fast --fast-vram` (`--fast-vram` is required here: parts 2 and 3 reach
-above `0xC000`; override with `FAST_FLAGS=`). They need vz2wav 2.3 or later,
-where the normal phase is the default. `make stage1` / `make parts` build
-just one side. The emulator-ready part files (`.vz`) and the two distributable
-fast tapes and all `.vz` emulator inputs (including the stage-one loader) are
-in `prod/`; intermediate files and the standard-speed tape are in `assets/`.
-`make clean` removes generated files from both locations and
-cleans legacy root-level build outputs. `VZPACK`/`VZ2WAV`
-default to the paths in the `Makefile`; override them if yours live
-elsewhere.
-
-Needs one of `z88dk-z80asm` (preferred) or `pasmo` on `PATH` for
-assembly — both have been verified to produce byte-identical output
-for this source.
+<p align="center">
+  <img src="screenshots/Title.png" alt="13 Ghosts Title Screen" width="380" />
+  &nbsp;&nbsp;
+  <img src="screenshots/Gameplay.png" alt="13 Ghosts Gameplay" width="380" />
+</p>
 
 ---
 
-## Controls (VZ200 keyboard)
+## The Story Behind the Port
 
-| Key | Action |
-|---|---|
-| `W` / `A` / `S` / `D` | up / left / down / right |
-| `Space` | fire |
-| `T` | toggle sound on/off (one toggle per press; holding the key does not flip it again) |
-| `Ctrl`+`Q` | restart: back to the title screen (the TRS-80's Clear+Break chord; `Q` alone does nothing) |
-| `Return` | enter |
+Both the TRS-80 and the VZ200 are powered by the trusty Z80 processor, but that is where the similarities end. 
 
-`T` is polled only during a real game, the same place the original polled its `S`/`T`
-sound keys. Pressing it while the demo is running just starts a game and does not also
-toggle the sound. The original TRS-80 `S` (off) / `T` (on) pair is gone: `S` is now Down,
-so it can no longer mute the game by accident. The extra direction keys (`X`, `Z`, `M`,
-`,`, `.`) are no longer read.
+The original TRS-80 version ran in a 64×16 memory-mapped text/semigraphics screen, used Model I/III keyboard matrix mapping, and relied on TRSDOS and Level II ROM routines for timing, high scores, and sound clicks. The VZ200, on the other hand, sports a Motorola MC6847 video chip running in 256×192 Mode 1 graphics, completely different keyboard rows, and its own unique cassette and speaker I/O.
 
-## Current pipeline (what the build actually uses)
+Rather than disassembling and shifting code around (which easily breaks compressed level data, animation tables, and jump tables), this port uses an in-place patching technique:
 
-| File | What it is |
-|---|---|
-| `tools/cmd_tools.py` | Parses TRS-80 TRSDOS `.cmd` load-module format, reassembles a flat memory image. Standalone; not part of the VZ200 build itself, but what originally produced `ghost13b.asm`'s source bytes. |
-| `ghost13b.asm` | Full `z80dasm` disassembly of the original TRS-80 game (the un-protection-patched variant — see `PORTING_NOTES.md`). v8 uses it only to **recover the original bytes** (from its `;addr<TAB>bytes` comments); its instruction text is no longer assembled. |
-| `port_13ghosts_v8.py` | **Current** porting script (patch in place; see above). Writes `prod/ghost13_p1/p2/p3.vz` for emulator tests, plus intermediate `.bin` files, `ghost13_hal.asm/.map`, and `ghost13_ram.bin` under `assets/`. |
-| `hal_vz.asm` | The VZ200/RC39 replacement routines the patched game calls: boot, screen-table fill, video blit, the 3x5 text renderer (HUD, title credits), keyboard, sound. |
-| `stage1.asm` | The bootstrap (12 bytes): bank 0 + RAM in the 4000-67FF window, then call the ROM's `TAPE_LOAD_COMMON` to load the next file. |
-| `Makefile` | The build chain. `make` → `assets/ghost13_two_stage.wav`, `prod/ghost13_fast.wav`, and `prod/ghost13_fast_inv.wav` (stage1 + 3 parts each). |
-| `splice_wav.py` | Concatenates the per-file WAVs into the final tape image. Generic — works for any number of same-format WAV segments. |
-| `tools/gen_blit.py` | Regenerates the `vz_blit_frame` / `vz_blit_rows4` / `vz_build_blit_tables` block in `hal_vz.asm` (table-driven, 32-pair unrolled, ~22 ms/frame for the full screen; `vz_blit_rows4` draws only the bottom four character rows). The margin-wipe check at the top of both entry points lives here too: edit the generator, not the generated block, or the next run erases your change. Run from the repository root with `python3 tools/gen_blit.py`. |
-| `tools/verify_blit.py` | Runs the new blit and a baseline build's original bit-twiddling blit on identical buffers in the Z80 emulator and compares VRAM byte for byte. Usage: `python3 tools/verify_blit.py [BASELINE_DIR]` (dir holding the old `ghost13_ram.bin` + `ghost13_hal.map`). |
-| `tools/verify_hud3.py` | Runs the real `vz_boot` + `vz_draw_hud_row` in a Z80 emulator: checks the 3x5 font cache (all 64 glyphs) and the HUD (score, level name, level, ghosts) byte for byte against an independent render of `font_3x5.asm`, and exercises the game's own score-add routine (`0x5780`) to bound the score field. Writes `hud3_render.png`. |
-| `tools/verify_title.py` | Runs the *real game* from its entry point to the title screen's final draw (`0x5396`) and checks credits page 1 against an independent render, then checks the margin wipe on the next blit. Writes `title_render.png`. |
-| `tools/verify_credit_pages.py` | Runs the real title sequence (slide-in, final draw, the whole tune) and then the real idle wait: checks each credits page against an independent render, that the wait takes the same time as the original `sub_c9eeh` (within 1%) and returns the same flags, the key-pressed path, and the margin wipe. Writes `credit_pages_render.png`. |
-| `tools/verify_win.py` | Runs the game's real win path (`0x568B`: screen 39, the HUD row template with the level name and the `*` winner marker) up to the patched copy at `0x56A7` and checks the 3x5 status row against an independent render of that template. Writes `win_render.png`. |
-| `tools/verify_highscores.py` | Runs the real game to the title, then the game's own name-entry routine (keys fed from a queue; only the key wait, music and release-wait helpers are stubbed): checks the prompt and the three name slots after every keystroke, the 3-letter limit, three real insertions through the game's table-shift code (`0x5A49`), and the table screen against an independent render. Writes `highscores_render.png`. |
-| `verify_gameover.py` | Runs the real game to the title, then replays the game-over sequence (`0x5A0C-0x5A3B`) with the game's own decode and summary routines for both halves of the skull flash; checks rows 44-55 against an independent semigraphics conversion, that nothing else in the playfield is touched, and the margin summary against an independent render. Writes `gameover_render.png`. |
-| `tools/verify_margins.py` | Checks the HUD / credits margin cleanup: the gameplay blit must not wipe the HUD (no flicker); any other blit must wipe both margins; a pending credits wipe must still happen on the first gameplay blit. |
+* **Original Game Engine Untouched**: The game’s original Z80 code and data sit right at their native addresses (`0x5200`–`0xCA05`).
+* **High-Speed Custom Blitter**: A hand-tuned assembly blitter renders the game smoothly in MC6847 Mode 1 (~22 ms/frame) with zero flicker.
+* **Proportional 3×5 Text Engine**: Because the VZ200's graphics screen has limited horizontal margins, custom 3×5 fonts were built to cleanly render scores, level names, credits, and the high-score table.
+* **Modern Loading Options**: The original tape takes almost 8 minutes to load. We added a fast loader that boots in around 100 seconds, plus support for Benn Venn's SD Loader cartridge!
 
-`tools/verify_font_cache.py` and `tools/verify_hud_render.py` test the old 8x8 font cache and HUD, which the 3x5 text renderer replaced; they no longer match the build.
+<p align="center">
+  <img src="screenshots/High%20Scores.png" alt="High Scores Screen" width="380" />
+  &nbsp;&nbsp;
+  <img src="screenshots/Game%20Over.png" alt="Game Over Screen" width="380" />
+</p>
 
-**Generated, not checked in as source**: the Makefile keeps intermediate files in `assets/` (stage-one `.bin`/`.wav`, part `.bin`/`.wav`, HAL assembler outputs, RAM image, stamp, and fast/standard audio segments). `prod/` contains all `.vz` files and the distributable `ghost13_fast.wav` / `ghost13_fast_inv.wav`. Both directories are ignored by Git.
+---
 
-## Documentation
+## Where Can You Play It?
 
-| File | Covers |
-|---|---|
-| `PORTING_NOTES.md` | Stage-1 findings: TRSDOS `.cmd` format, the `ghost13a`/`ghost13b` copy-protection-patch diff, entry point (`0x535A`), the external ROM/DOS call map. |
-| `REAUDIT_v2.md` | The `0x7800` → `0x7AE8` relocation (ROM workspace collision + the CLOAD self-corruption bug it caused), the leftover-ROM-call reachability triage, and the toolchain verification (real `z88dk-z80asm`/`vzpack`/`vz2wav` vs. the `pasmo` stand-in). |
-| `STAGE1_NOTES.md` | The bank 1 / bank 2 memory-aliasing hazard (from the RC39 `memory_map.md`), why the two-stage load fixes it, and the ROM-code-level emulator verification (all 8 boot-time bank states, real `TAPE_LOAD_COMMON`). |
-| `PROGRESS.md` | Overall project log through the v2/v3 relocation and re-audit work. **Predates** the bank-aliasing fix and the font-cache work below — treat `STAGE1_NOTES.md` and this README as the more current sources for anything that conflicts. |
-| `texmode-issues.md` | Your own doc on the text-mode/HUD rendering gap (semigraphics-only blitter drops ordinary text) and the original 8x8 `PRN_GFX_FONT` tile-cache plan. **Superseded** by the 3x5 renderer below (see "Text rendering"): the 8x8 cache and its HUD are gone. |
-| `font-asset-research/` | The 3x5 bitmap font (`font_3x5.asm`, CC0, 64 glyphs x 2 bytes) the build now uses, plus the research that produced it. Ordinal 0x1F (`_`) was a copy of `<` and is fixed here. |
+> [!IMPORTANT]
+> **Stock VZ200 vs. HB200 / RC39**: Please check your hardware setup before picking a build target!
 
-## Reference material (not part of this repo — inputs from elsewhere)
+*13 Ghosts* was an expansive 30KB+ TRS-80 title. Because the game engine runs in-place at its original native addresses, it requires memory across regions that stock VZ machines don't traditionally have writable:
+* `0x4000`–`0x67FF`: Writable RAM in the cartridge/ROM expansion area (used for compressed screen data).
+* `0x6800`–`0x77FF`: Hardware I/O and Video RAM.
+* `0x7AE8`–`0xFFFF`: User BASIC RAM all the way through the top of memory.
 
-- `export.lst` — full disassembly of the VZ200 BASIC ROM. Load-bearing reference for nearly everything above the CMD-parsing stage: the RST-vector/DCB workspace layout, `TAPE_LOAD_COMMON` and everything it calls, `PRN_GFX_FONT`, keyboard matrix addresses. Extracted as a raw 16K ROM binary (parser handles the listing's primary + continuation hex-dump lines) for the emulator verification in `STAGE1_NOTES.md`.
-- `RC39-Backplane-System-for-VZ200-main/` (your repo) — `documents/memory_map.md` and the Banking/Decode GAL CUPL sources are what `REAUDIT_v2.md` and `STAGE1_NOTES.md` verify against. Not duplicated here; refer to your own copy.
-- `vz2wav-decompile-main/` (your repo) — source for `vzpack`/`vz2wav`/`wav2vz`. `dist/linux.zip` has working prebuilt x86-64 binaries despite the `ia64-linux` directory name.
-- `z88dk-master.zip` — source for `z88dk-z80asm`. Needs 4 git submodules (`uthash`, `optparse`, `regex`, `UNIXem`) that a plain GitHub zip download doesn't include.
+Here is how to play depending on your setup:
 
-## What the patcher changes (and how to check it)
+* **Stock VZ200 / VZ300 — Benn Venn SD Loader Required**:
+  A stock unexpanded VZ cannot load the tape version because its `0x4000`–`0x67FF` region is read-only ROM space. To play on a stock machine, **the Benn Venn SD Loader cartridge is required**. Its onboard CPLD provides the necessary banked SRAM via port `0x37`. Just run `make sd`, copy `13GHOSTS.VZ` and the `13GHOST*.DAT` files to your SD card root, boot up, and enter `LOAD"13GHOSTS"`.
+* **HB200 / RC39 Backplane — Tape or SD**:
+  The **HB200 / RC39 Backplane System** has port-`0x70` bank-switching that maps a 10K RAM window directly into that ROM space. You can load straight from cassette tape (`prod/ghost13_fast.wav` or `assets/ghost13_two_stage.wav`) by typing `CRUN` (or `CLOAD` then `RUN`), or use the SD Loader.
+* **Emulators**:
+  * **Java VZ200 Emulator**: Verified and plays smoothly! It models both the RC39 memory map (for loading the `.wav` tapes) and the Benn Venn SD Loader (for streaming from a folder card).
+  * **MAME**: Possibly playable with suitable memory expansion settings, but currently untested.
 
-`python3 port_13ghosts_v8.py` prints every patched site with the original and
-new bytes; each patch is asserted against the expected original bytes, the
-untouched game bytes are checked identical to the original, and every moved
-screen is decompressed from its new address and compared with the original
-decode.  Patches: 5 video-RAM copies (`3C00h`), 5 keyboard reads (`3840h`,
-`3804h`, and the any-key poll at `C9FD`), 4 sound `out` instructions plus the 4
-stores that used to poke the port number into them, the TRSDOS high-score
-read/write bypasses, and the screen-table builder (`C750`).
+---
 
-Fixes this design made unnecessary or that were found along the way:
+## What You Need to Build It
 
-* text is drawn with the 3x5 font (see "Text rendering" below), not the VZ200 ROM
-  font: the ROM table has 17 bad bytes in 10 glyphs, and an 8x8 cell only gives a
-  16-character line;
-* the first port inverted the sense of the any-key poll (`vz_check_fire`), which
-  turned every wait-for-key loop inside out; it now returns NZ when any key
-  is down, like the original;
-* the original `push bc` before the video copy at `5577h` has to be kept
-  (`vz_blit_site1`), because `5583h` pops it again.
+Building the project is straightforward and works on modern Linux, macOS, and BSD systems.
 
-Memory map after loading, original addresses unless noted: `4000` stub,
-`4050-51FF` screens C, `5200-644A` game, `644B-67FF` screens A, `6800-77FF` VZ200
-I/O + video RAM, `7AE8` stub, `7AF0-886B` screens B, `886C-CA05` game,
-`CA12-E411` game buffers/table (runtime), `E420` replacement routines, `F400`
-3x5 font cache (320 bytes), `F540` name-entry buffer (15 bytes), `F600-FBFF`
-blit lookup tables (6 pages), stack from `FFFF`.
+You’ll just need:
+* **Python 3** (3.8 or newer)
+* **GNU Make**
+* **`z80dasm`** (the Z80 disassembler):
+  * **Ubuntu / Debian**: `sudo apt install z80dasm`
+  * **Fedora**: `sudo dnf install z80dasm`
+  * **macOS**: `brew install z80dasm`
 
-## Text rendering (3x5 font)
+All other VZ200 toolchain binaries (`vzpack`, `vz2wav`, and `z88dk-z80asm`) are already bundled in the [`vz-toolbox/bin/`](vz-toolbox/bin/) directory.
 
-The semigraphics blitter (`vz_blit_frame`) only draws cells with bit 7 set, so the
-game's ordinary text is drawn separately by `vz_draw3` / `vz_puts3` in
-`hal_vz.asm`.  A glyph is 3 pixels of ink plus a blank column = 4 pixels = exactly
-one byte in Mode 1, so every glyph row is one byte, every cell is byte-aligned
-(no shifting) and a 128-pixel line holds **32 cells** (the old 8x8 font held 16).
-The glyphs are stored packed (128 bytes) and expanded at boot into a 320-byte
-cache at `F400h` (`vz_build_font3`).  The font has no lower case; `vz_draw3`
-upper-cases.
+---
 
-| Where | What | How |
+## Getting Started
+
+### 1. Bring Your Own Original TRS-80 Game File
+
+Because the original 1982 game is copyrighted commercial software, we don't distribute the game binaries in this repo. You'll need a copy of the original TRS-80 `.cmd` file (such as `ghost13b.cmd` from the popular `13_Ghosts__1982__Software_Affair-Tandy__CMD_.zip` archive).
+
+Drop the file into the `cmds/` folder:
+* `cmds/ghost13b.cmd` *(this is the version the build chain uses)*
+* `cmds/ghost13a.cmd` *(optional, original copy-protected disk dump for reference)*
+
+*(See [`cmds/README.md`](cmds/README.md) for expected file sizes and SHA-256 hashes if you want to verify your file).*
+
+### 2. Run Make!
+
+Once `cmds/ghost13b.cmd` is in place, simply open a terminal in the project directory and run:
+
+```bash
+make
+```
+
+The build system will automatically:
+1. Verify and disassemble the `.cmd` file into `ghost13b.asm` using `z80dasm`.
+2. Apply the VZ200 hardware abstraction layer and 3×5 font renderer.
+3. Assemble the replacement code and package all the parts.
+4. Output ready-to-play `.wav` cassette audio files and emulator images into `prod/` and `assets/`.
+
+---
+
+## Make Targets
+
+Here is a quick cheat sheet of what you can build:
+
+| Command | What it builds | Where to find it |
 |---|---|---|
-| Top margin (rows 0-7, ink rows 2-6, cells 7-23) | The 17-character level-name field of the game's HUD row (`DDE8h`), exactly as the game holds it, no label | `vz_draw_hud_row`, called from `vz_blit_site1` every gameplay frame |
-| Bottom margin (rows 56-63, ink rows 57-61) | `SCORE ddddddddd LEVEL dd GH dd`: the whole 9-character score field (cols 8-16, the ones digit is never incremented), level, ghosts | same |
-| Game over (top margin row 2, bottom margin row 57) | `FINAL SCORE ddddddddd` above the skull, `LEVEL dd  GHOSTS dd` below it, read from the buffer the game's `sub_5B6D` fills in. The skull's lower rows (12-15) are drawn by `vz_blit_rows4` | `vz_gameover_blit`, patched in at `0x5BA2` (replaces the copy to `3F00h`) |
-| Win screen (screen 39) | The game's HUD row template (`61D5h`) as the usual two margin lines: level name `13 GHOSTS` on top, `SCORE *dddddddd LEVEL dd GH dd` below (the `*` is the winner marker the game puts in the first character of the score field) | `vz_win_row`, patched in at `0x56A7` (replaces the copy to `3FC0h`); shares `vz_hud_from_ix` with the gameplay HUD |
-| Name entry (screen 37), rows 41-53 | `TYPE YOUR NAME, THEN RETURN` and three slots (`AB_`); names are **3 letters** now | `vz_name_cursor`, patched in at `0x5B31`; the typed name lives in `NAME_BUF` (`F540h`) instead of TRS-80 video RAM `3EE9h` (`0x5B2E`, `0x5AAF`, limit at `0x5B5B`) |
-| High-score table (screen 38), rows 33-61 | Two columns of five lines, `rr nnn ssssssss` (rank, first 3 name characters, low 8 of the score field's 9 characters; a score of 100,000,000 or more, which should be unreachable, shows ` BUSTER!` instead; the game's `*` winner marker is drawn in the first blank cell of the score), 2-cell gutter; the screen's header underline (row 38) is cleared | `vz_hs_blit`, patched in at `0x5AFD` (inside `sub_5AE1`, used both after name entry and from the attract loop) |
-| Title credits (rows 41-63, under the logo) | The full original credit text as **three pages** of up to three centred lines: page 1 after the slide-in (through the tune), page 2 when the idle wait for a key starts, page 3 after that wait's first pass (~2.8 s). The music engine is cycle-counted and is not touched; nothing is drawn while it plays | `vz_title_draw`, patched in at `0x5396` (the title's final static draw), and `vz_title_wait`, patched in at `0x53FF` in place of `call sub_c9eeh` (same polls, same ~5.6 s, same return convention) |
+| `make` / `make all` | Builds all tape formats (standard, fast, and inverted phase) | `prod/` and `assets/` |
+| `make fast` | Fast loader tape (~103 seconds) for stock VZ200s and emulators | `prod/ghost13_fast.wav` |
+| `make fast-inv` | Fast loader tape with inverted audio phase (for RC39 / HB200 homebrews) | `prod/ghost13_fast_inv.wav` |
+| `make standard` | Traditional ROM-format cassette tape (~580 baud, ~8 mins) | `assets/ghost13_two_stage.wav` |
+| `make sd` | Card files for the Benn Venn SD Loader | `prod/sd/13GHOSTS.VZ` + `.DAT` files |
+| `make disasm` | Re-runs the `.cmd` disassembly step explicitly | `ghost13a.asm`, `ghost13b.asm` |
+| `make clean` | Cleans up intermediate build files | `assets/` and `prod/` |
+| `make distclean` | Complete clean, including removing the generated disassembly files | — |
 
-The HUD and credits live in the 8-row margins above and below the 48-row
-playfield, which the screen blit never touches, so they would stay on screen
-after the game moves on.  `vz_margin_dirty` handles that: `vz_draw_hud_row` sets
-bit 1, `vz_title_draw` and `vz_gameover_blit` set bit 0, and the next `vz_blit_frame` that is **not**
-the gameplay one (game over, demo end, any other screen) wipes both margins
-first.  `vz_blit_site1` drops the HUD bit before each gameplay blit so the HUD is
-never wiped (and flickers) mid-game, but leaves the credits bit so the first
-gameplay frame removes the title credits.  `tools/verify_margins.py` checks this.
+---
 
-Game over: `sub_5B6D` writes `Final Score` (row 12, cols 2-12), the 9-character score (row 13, cols 3-11), `Ghost:  n` (row 12, cols 50-58) and `Level:  n` (row 13, cols 50-58) into rows 12-13 of buffer 0, then copies rows 12-15 to the screen.  The loop at `0x5A12` runs ten times, alternating the skull with the GAME OVER banner (screen 35) and the plain skull (screen 1E).  Only those four rows are redrawn each time; the rows above keep the last animation frame (screen 1D).
+## Playing the Game
 
-Not covered yet (all character-mode text the semigraphics blitter drops, or
-direct TRS-80 video RAM access):
-* name entry has no backspace: any control character restarts the entry (the
-  game's own behaviour), so a typo means starting over;
-* the start-of-game HUD row is written straight to `3FC0h` at `0x56A7`
-  (not patched).
+### Controls (VZ200 Keyboard)
 
-The TRSDOS high-score file is not saved.  Real hardware has not been tried.
+The controls have been adapted to fit naturally on the VZ200 keyboard:
 
-## Superseded — moved to `archive/`
+* **`W` / `A` / `S` / `D`** — Move your blaster Up, Left, Down, and Right
+* **`Space`** — Fire!
+* **`T`** — Toggle Sound On / Off *(polled during gameplay so you won't mute it accidentally)*
+* **`Ctrl` + `Q`** — Abort and return to the Title Screen
+* **`Return`** — Confirm initials on the high-score table
 
-`port_13ghosts_v7.py` (the last relocating version) and older scripts are kept for reference only.
+---
 
-Kept only as a record of how the design evolved; the `Makefile` doesn't
-reference any of these, and each was replaced for a specific,
-documented reason:
+## Want to Learn More?
 
-| File | Superseded by | Why |
-|---|---|---|
-| `archive/port_13ghosts.py` | `_v2` | Hardcoded `org 0x7800` — collides with the ROM's RST-vector/DCB workspace and corrupts CLOAD's own hand-off address. See `REAUDIT_v2.md` §"Critical bug." |
-| `archive/port_13ghosts_v2.py` | `_v3` | Fixed the org, but predates the bank-aliasing discovery — no runtime bank handling at all. |
-| `archive/port_13ghosts_v3.py` | `_v4` | Added an 8-way runtime bank probe to handle the RC39's undefined boot-time bank state. Made unnecessary once the two-stage load deterministically forces bank 0 before stage 2 ever loads — `_v4` removes it (and the ~48 bytes it cost). |
-| `archive/ghost13a.asm`/`.bin`/`.sym` | *(reference only)* | The copy-protection-patched TRS-80 variant, not the one the VZ200 build is based on (`ghost13b`). Kept only per `PORTING_NOTES.md`'s a/b diff record, not used downstream. |
-| `archive/Makefile.fixed` | current `Makefile` | Intermediate fix for the org-address bug, predates the two-stage load entirely (no `stage1`/splice rules). |
+If you are interested in the nitty-gritty assembly details, reverse engineering, and VZ200 hardware tricks:
+* [`AGENT-README.md`](AGENT-README.md) contains deep architectural notes, memory maps, and verification details.
+* [`PORTING_NOTES.md`](PORTING_NOTES.md) covers the disassembly findings, TRSDOS SVC calls, and protection diffs.
+* [`sd/SD_LOADER.md`](sd/SD_LOADER.md) explains how the Benn Venn SD Loader streaming stub works.
+
+---
+
+## License & Disclaimers
+
+* **Port Code & Toolchain**: The porting harness, VZ200 HAL, custom blitter, and build tools are released under the [MIT License](LICENSE).
+* **3×5 HUD Font**: Derived from *"Another Tiny Pixel Font Mono 3x5"* by Alassë Eärfalas ([itch.io](https://alasseearfalas.itch.io/another-tiny-pixel-font-mono-3x5)), released under the [Creative Commons CC0 1.0 Universal (Public Domain Dedication)](font-asset-research/LICENCE).
+* **Original Game & Trademarks**: *13 Ghosts* was originally written by Berta Eggers and Larry Payne, published in 1982 by Software Affair / Radio Shack. Original TRS-80 game binaries and disassembly listings remain the intellectual property of their respective copyright holders and are **not** distributed in this repository. 
+* **Disclaimer**: This project is an independent, non-commercial fan port created for educational and historical preservation purposes. It is not affiliated with, sponsored by, or endorsed by Software Affair, Radio Shack, Tandy Corporation, or VTech. All product names, trademarks, and registered trademarks belong to their respective owners.

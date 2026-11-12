@@ -40,6 +40,15 @@ flat memory image:
 just trailing sector padding (zeros then `0xE5` filler) after a clean `02`
 end record — not program content.
 
+### CMD File Verification Hashes
+
+| File | Size (bytes) | MD5 | SHA-1 | SHA-256 |
+|---|---|---|---|---|
+| `cmds/ghost13a.cmd` | 32,000 | `8b379fd2ea901e36a12116c349fd975a` | `02c28cf65aa42f34e16cde5f1761608dc2ee44bd` | `3ac9080f984cc865918f4068862ff5cfb9dbc349a20cc8b7c2f84a62ab8526fd` |
+| `cmds/ghost13b.cmd` | 31,214 | `8b64617be60aa89b6bf1fd283d5cf6cb` | `b2b017c6a80767969b6383444f53ee5f8d10c495` | `e77967ecb811807f87a686fb1c64dc13826c9f1c70c11ce1940ea93886ad3880` |
+
+Disassembly outputs (`ghost13a.asm`, `ghost13b.asm`, `ghost13a.sym`, `ghost13b.sym`) can be regenerated bit-for-bit from these `.cmd` files by running `make disasm` or `python3 tools/disasm_cmds.py`.
+
 ## a vs. b: not two different disks — a 10-byte protection patch
 
 Byte-for-byte, the two reconstructed memory images are identical except at
@@ -97,9 +106,10 @@ it's self-contained.
 - `ghost13a.bin` / `ghost13b.bin` — flat memory images, load at `0x5200`
 - `ghost13a.asm` / `ghost13b.asm` — full z80dasm listing (labels, hex,
   addresses) for each variant
-- `ghost13a.sym` / `ghost13b.sym` — label/symbol tables z80dasm generated
+- `ghost13a.sym` / `ghost13b.sym` — label/symbol tables z80dasm generated (via `z80dasm -s`, not the port script)
 - `tools/cmd_tools.py` — the CMD-record parser + flat-image extractor, in case
   you want to re-run it against other Model I/III `.cmd` dumps
+- `tools/disasm_cmds.py` — automated end-to-end tool to hash `./cmds/*.cmd`, extract the flat binary, and invoke `z80dasm` to produce `.asm` and `.sym` files matching the reference byte-for-byte (`make disasm`)
 
 ## Suggested next steps for the VZ200 port
 
